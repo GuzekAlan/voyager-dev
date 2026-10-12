@@ -8,7 +8,7 @@
 -export([proc_links/2, proc_monitors/2, proc_monitored_by/2]).
 -export([proc_dictionary/3, proc_messages/3, proc_label/2, proc_state/3]).
 -export([ets_select_chunk/4, ets_lookup/5, ets_select_spec/5]).
--export([trace_start/3]).
+-export([trace_start/3, trace_stop/1, trace_sessions/0]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
@@ -647,7 +647,9 @@ bound_records([Record | Rest], Budget, Truncated, Acc) ->
 -define(TRACE_MAX_TIME_MS, 3_600_000).
 -define(TRACE_MAX_BUDGET, 100_000).
 -define(TRACE_MAX_MATCH_SPEC_BYTES, 65_536).
+-define(TRACER_TAG, '$voyager_tracer').
 -define(TRACE_NAMES_CAP, 1_000).
+-define(TRACE_MAX_SESSIONS, 5).
 -define(TRACE_MAX_PIDS, 100).
 -define(TRACE_MAX_CLAUSES, 10).
 -define(TRACE_SPEC_FIELDS,
@@ -703,6 +705,34 @@ trace_start(Collector, Spec, Limits) when is_pid(Collector) ->
     end;
 trace_start(_Collector, _Spec, _Limits) ->
     {error, {invalid, collector}}.
+
+-spec trace_stop(pid()) -> ok | {error, timeout | not_found}.
+trace_stop(Tracer) when is_pid(Tracer), node(Tracer) =:= node() ->
+    case erlang:process_info(Tracer, {dictionary, ?TRACER_TAG}) of
+        {_, true} ->
+            stop_tracer(Tracer);
+        _ ->
+            {error, not_found}
+    end;
+trace_stop(_Tracer) ->
+    {error, not_found}.
+
+stop_tracer(Tracer) ->
+    MRef = erlang:monitor(process, Tracer),
+    Tracer ! voyager_trace_stop,
+    receive
+        {'DOWN', MRef, process, Tracer, noproc} ->
+            {error, not_found};
+        {'DOWN', MRef, process, Tracer, _Reason} ->
+            ok
+    after ?TRACE_TIMEOUT ->
+        erlang:demonitor(MRef, [flush]),
+        {error, timeout}
+    end.
+
+-spec trace_sessions() -> non_neg_integer().
+trace_sessions() ->
+    length(voyager_sessions()).
 
 trace_validate(Spec, Limits) ->
     maybe
@@ -897,8 +927,9 @@ spawn_tracer(Collector, Plan) ->
     end.
 
 %% A tracer that dies takes its session with it, so only clean failures need a destroy.
-tracer_init(Caller, Ref, Collector, {_, _, _, _, _, Limits} = Plan) ->
-    Session = trace:session_create(voyager, self(), []),
+tracer_init(Caller, Ref, Collector, {_, _, _, Processes, _, Limits} = Plan) ->
+    put(?TRACER_TAG, true),
+    Session = trace:session_create(session_name(Processes), self(), []),
     case tracer_install(Session, Plan) of
         ok ->
             erlang:monitor(process, Collector),
@@ -916,11 +947,32 @@ tracer_init(Caller, Ref, Collector, {_, _, _, _, _, Limits} = Plan) ->
             Caller ! {Ref, Error}
     end.
 
+session_name(all) ->
+    voyager_all;
+session_name(_Pids) ->
+    voyager.
+
 tracer_install(Session, {MFA, Scope, MatchSpec, Processes, Flags, _Limits}) ->
     maybe
+        ok ?= session_cap(),
         ok ?= trace_function(Session, MFA, MatchSpec, Scope),
         trace_processes(Session, Processes, Flags)
     end.
+
+%% The session exists before this count, so racers for the last slot can both lose, never both win.
+session_cap() ->
+    Sessions = voyager_sessions(),
+    case {length(Sessions), length([all || voyager_all <- Sessions])} of
+        {Total, _} when Total > ?TRACE_MAX_SESSIONS ->
+            {error, too_many_sessions};
+        {_, All} when All > 1 ->
+            {error, all_processes_busy};
+        _ ->
+            ok
+    end.
+
+voyager_sessions() ->
+    [Name || {Name, _} <- trace:session_info(all), Name =:= voyager orelse Name =:= voyager_all].
 
 trace_function(Session, MFA, MatchSpec, Scope) ->
     case trace:function(Session, MFA, MatchSpec, [Scope]) of

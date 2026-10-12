@@ -218,6 +218,7 @@ defmodule VoyagerAgentTraceTest do
     assert_receive {:DOWN, ^ref, :process, ^dead, _reason}
 
     assert {:error, {:noproc, ^dead}} = start(spec(processes: [self(), dead]), @limits)
+    assert @agent_module.trace_sessions() == 0
   end
 
   test "rejects specs it cannot or should not trace" do
@@ -250,6 +251,58 @@ defmodule VoyagerAgentTraceTest do
              start(spec(module: "trace", function: :_, arity: :_), @limits)
   end
 
+  test "caps a node at five sessions" do
+    assert eventually(fn -> @agent_module.trace_sessions() == 0 end)
+
+    for _ <- 1..5, do: assert({:ok, _tracer} = start(spec(), @limits))
+
+    assert @agent_module.trace_sessions() == 5
+    assert {:error, :too_many_sessions} = start(spec(), @limits)
+    assert @agent_module.trace_sessions() == 5
+  end
+
+  test "allows a single all-processes session" do
+    all = spec(module: "Elixir.Date", function: "leap_year?", arity: 1, processes: :all)
+
+    assert {:ok, _tracer} = start(all, @limits)
+    assert {:error, :all_processes_busy} = start(all, @limits)
+    assert {:ok, _tracer} = start(spec(), @limits)
+    assert @agent_module.trace_sessions() == 2
+  end
+
+  test "trace_stop ends the trace and removes the session" do
+    {:ok, tracer} = start(spec(), @limits)
+    ref = Process.monitor(tracer)
+
+    assert :ok = @agent_module.trace_stop(tracer)
+
+    assert_receive {:DOWN, ^ref, :process, ^tracer, _reason}
+    assert {[], :stopped, _stats} = collect(tracer)
+    assert voyager_sessions(:trace.session_info(:all)) == []
+    assert voyager_sessions(:trace.session_info(self())) == []
+    assert @agent_module.trace_sessions() == 0
+    assert {:error, :not_found} = @agent_module.trace_stop(tracer)
+  end
+
+  test "a killed tracer leaves no session behind" do
+    {:ok, tracer} = start(spec(), @limits)
+    ref = Process.monitor(tracer)
+
+    Process.exit(tracer, :kill)
+
+    assert_receive {:DOWN, ^ref, :process, ^tracer, :killed}
+    assert eventually(fn -> voyager_sessions(:trace.session_info(:all)) == [] end)
+    assert voyager_sessions(:trace.session_info(self())) == []
+  end
+
+  test "trace_stop leaves processes that are not tracers alone" do
+    other = start_supervised!({Agent, fn -> nil end})
+
+    assert {:error, :not_found} = @agent_module.trace_stop(other)
+    assert {:error, :not_found} = @agent_module.trace_stop(self())
+    assert Agent.get(other, & &1) == nil
+  end
+
   test "stops when its mailbox backs up" do
     {:ok, tracer} = start(spec(), %{max_time_ms: 5_000, budget: 10})
 
@@ -274,7 +327,33 @@ defmodule VoyagerAgentTraceTest do
   end
 
   defp start(spec, limits, collector \\ self()) do
-    @agent_module.trace_start(collector, spec, limits)
+    case @agent_module.trace_start(collector, spec, limits) do
+      {:ok, tracer} = ok ->
+        on_exit(fn -> @agent_module.trace_stop(tracer) end)
+        ok
+
+      error ->
+        error
+    end
+  end
+
+  defp voyager_sessions(sessions) do
+    Enum.filter(sessions, &match?({name, _} when name in [:voyager, :voyager_all], &1))
+  end
+
+  # A killed tracer's session is freed with its heap, which can land just after DOWN.
+  defp eventually(check, deadline \\ System.monotonic_time(:millisecond) + 1_000) do
+    cond do
+      check.() ->
+        true
+
+      System.monotonic_time(:millisecond) > deadline ->
+        false
+
+      true ->
+        :erlang.yield()
+        eventually(check, deadline)
+    end
   end
 
   defp remote_pid do
