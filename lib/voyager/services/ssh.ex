@@ -1,4 +1,4 @@
-defmodule Voyager.Services.Ssh do
+defmodule Voyager.Services.SSH do
   @moduledoc """
   SSH transport used by `Voyager.Services.RemoteNodeConnector`.
 
@@ -6,8 +6,6 @@ defmodule Voyager.Services.Ssh do
   the SSH connection is gone. `open_tunnel/3` listens on `127.0.0.1` until
   `close/1`.
   """
-
-  alias Voyager.Services.Ssh.Erlssh
 
   @type conn :: pid()
   @type auth :: :agent | {:password, String.t()}
@@ -27,12 +25,15 @@ defmodule Voyager.Services.Ssh do
 
   @spec connect(String.t(), :inet.port_number(), String.t(), auth()) ::
           {:ok, conn()} | {:error, term()}
-  defdelegate connect(host, port, user, auth), to: Erlssh
+  def connect(host, port, user, auth), do: impl().connect(host, port, user, auth)
 
   @spec open_tunnel(conn(), String.t(), :inet.port_number()) ::
           {:ok, :inet.port_number()} | {:error, term()}
-  defdelegate open_tunnel(conn, remote_host, remote_port), to: Erlssh
+  def open_tunnel(conn, remote_host, remote_port),
+    do: impl().open_tunnel(conn, remote_host, remote_port)
 
   @spec close(conn()) :: :ok
-  defdelegate close(conn), to: Erlssh
+  def close(conn), do: impl().close(conn)
+
+  defp impl, do: Application.get_env(:voyager, :ssh, __MODULE__.Erlssh)
 end
