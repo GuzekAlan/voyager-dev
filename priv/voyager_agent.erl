@@ -909,6 +909,8 @@ spawn_tracer(Collector, Plan) ->
         spawn_opt(fun() -> tracer_init(Caller, Ref, Collector, Plan) end,
                   [monitor,
                    {priority, high},
+                   %% Traced processes enqueue without taking the tracer's main lock, and a full
+                   %% mailbox stops the trace via `mailbox_limit' instead of a heap-limit kill.
                    {message_queue_data, off_heap},
                    {max_heap_size,
                     #{size => 10_000_000,
