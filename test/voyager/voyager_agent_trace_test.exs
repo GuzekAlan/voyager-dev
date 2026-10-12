@@ -6,44 +6,40 @@ defmodule VoyagerAgentTraceTest do
   alias Voyager.Test.VoyagerAgentFixture
 
   @agent_module Voyager.Agent.module()
-  @spec_args %{
-    module: "Elixir.String",
-    function: "jaro_distance",
-    arity: 2,
-    capture: :args,
-    local: false
-  }
   @limits %{max_events: 1_000, max_rate: 1_000, max_time_ms: 5_000, budget: 50}
 
   setup do
     VoyagerAgentFixture.load!()
+    Code.ensure_loaded!(Date)
     :ok
   end
 
   test "pushes calls with their arguments and stops at the event limit" do
-    {:ok, tracer} = @agent_module.trace_start(self(), @spec_args, %{@limits | max_events: 3})
+    {:ok, tracer} = start(spec(), %{@limits | max_events: 3})
 
     for _ <- 1..5, do: String.jaro_distance("voyager", "voyage")
 
     assert {events, :event_limit, %{events: 3, dropped: 0}} = collect(tracer)
-    assert [%{mfa: {String, :jaro_distance, 2}, args: ["voyager", "voyage"]} | _] = events
+
+    assert [%{type: :call, mfa: {String, :jaro_distance, 2}, args: ["voyager", "voyage"]} | _] =
+             events
+
     assert length(events) == 3
   end
 
   test "arity capture sends no arguments" do
-    spec = %{@spec_args | capture: :arity}
-    {:ok, tracer} = @agent_module.trace_start(self(), spec, %{@limits | max_events: 1})
+    {:ok, tracer} = start(spec(capture: :arity), %{@limits | max_events: 1})
 
     String.jaro_distance("a", "b")
 
     assert {[event], :event_limit, _stats} = collect(tracer)
-    assert %{mfa: {String, :jaro_distance, 2}, pid: pid} = event
+    assert %{type: :call, mfa: {String, :jaro_distance, 2}, pid: pid} = event
     assert pid == self()
     refute Map.has_key?(event, :args)
   end
 
   test "stops when the rate limit is exceeded" do
-    {:ok, tracer} = @agent_module.trace_start(self(), @spec_args, %{@limits | max_rate: 5})
+    {:ok, tracer} = start(spec(), %{@limits | max_rate: 5})
 
     for _ <- 1..20, do: String.jaro_distance("a", "b")
 
@@ -51,45 +47,229 @@ defmodule VoyagerAgentTraceTest do
   end
 
   test "stops when the time limit runs out" do
-    {:ok, tracer} = @agent_module.trace_start(self(), @spec_args, %{@limits | max_time_ms: 50})
+    {:ok, tracer} = start(spec(), %{@limits | max_time_ms: 50})
 
     assert {[], :time_limit, %{events: 0}} = collect(tracer)
   end
 
-  test "a stop message ends the trace and removes the session" do
-    {:ok, tracer} = @agent_module.trace_start(self(), @spec_args, @limits)
-    ref = Process.monitor(tracer)
+  test "stops at the event limit when it is the only limit given" do
+    {:ok, tracer} = start(spec(), %{max_events: 2, budget: 50})
 
-    send(tracer, :voyager_trace_stop)
+    for _ <- 1..5, do: String.jaro_distance("a", "b")
 
-    assert {[], :stopped, _stats} = collect(tracer)
-    assert_receive {:DOWN, ^ref, :process, ^tracer, :normal}
-    refute Enum.any?(:trace.session_info(:all), &match?({:voyager, _}, &1))
+    assert {[_, _], :event_limit, %{events: 2}} = collect(tracer)
   end
 
   test "stops when the collector goes down" do
-    collector = spawn(fn -> Process.sleep(:infinity) end)
-    {:ok, tracer} = @agent_module.trace_start(collector, @spec_args, @limits)
+    collector = start_supervised!({Agent, fn -> nil end})
+    {:ok, tracer} = start(spec(), @limits, collector)
     ref = Process.monitor(tracer)
 
-    Process.exit(collector, :kill)
+    :ok = stop_supervised!(Agent)
 
     assert_receive {:DOWN, ^ref, :process, ^tracer, :normal}
+  end
+
+  test "a pid list traces only the listed processes" do
+    other = start_supervised!({Agent, fn -> nil end})
+    {:ok, tracer} = start(spec(), %{@limits | max_events: 1})
+
+    Agent.get(other, fn _ -> String.jaro_distance("other", "x") end)
+    String.jaro_distance("mine", "x")
+
+    assert {[event], :event_limit, _stats} = collect(tracer)
+    assert %{args: ["mine", "x"], pid: pid} = event
+    assert pid == self()
+  end
+
+  test "all processes traces calls from any process" do
+    other = start_supervised!({Agent, fn -> nil end})
+
+    {:ok, tracer} =
+      start(
+        spec(module: "Elixir.Date", function: "leap_year?", arity: 1, processes: :all),
+        %{@limits | max_events: 1}
+      )
+
+    Agent.get(other, fn _ -> Date.leap_year?(~D[2024-01-01]) end)
+
+    assert {[%{type: :call, mfa: {Date, :leap_year?, 1}, pid: ^other}], :event_limit, _stats} =
+             collect(tracer)
+  end
+
+  test "return trace pairs a call with its return value" do
+    {:ok, tracer} = start(spec(return_trace: true), %{@limits | max_events: 2})
+
+    String.jaro_distance("a", "a")
+
+    assert {[call, return], :event_limit, _stats} = collect(tracer)
+    assert %{type: :call, mfa: {String, :jaro_distance, 2}, args: ["a", "a"]} = call
+    assert %{type: :return, mfa: {String, :jaro_distance, 2}, value: 1.0} = return
+  end
+
+  test "return trace reports a raising call as an exception" do
+    {:ok, tracer} =
+      start(
+        spec(module: "Elixir.Date", function: "from_iso8601!", arity: 1, return_trace: true),
+        %{@limits | max_events: 2}
+      )
+
+    assert_raise ArgumentError, fn -> Date.from_iso8601!("x") end
+
+    assert {[call, exception], :event_limit, _stats} = collect(tracer)
+    assert %{type: :call, mfa: {Date, :from_iso8601!, 1}} = call
+    assert %{type: :exception, mfa: {Date, :from_iso8601!, 1}, value: {:error, _}} = exception
+  end
+
+  test "a match spec guard filters calls" do
+    match_spec = [{[:"$1", :_], [{:==, :"$1", "keep"}], []}]
+    {:ok, tracer} = start(spec(match_spec: match_spec), %{@limits | max_events: 1})
+
+    String.jaro_distance("drop", "x")
+    String.jaro_distance("keep", "x")
+
+    assert {[%{type: :call, args: ["keep", "x"]}], :event_limit, _stats} = collect(tracer)
+  end
+
+  test "a match spec message action lands in the event" do
+    match_spec = [{[:"$1", :_], [], [{:message, :"$1"}]}]
+    {:ok, tracer} = start(spec(match_spec: match_spec), %{@limits | max_events: 1})
+
+    String.jaro_distance("voyager", "x")
+
+    assert {[%{type: :call, message: "voyager"}], :event_limit, _stats} = collect(tracer)
+  end
+
+  test "rejects match specs it cannot or should not install" do
+    assert {:error, {:refused_action, :silent}} =
+             start(spec(match_spec: [{:_, [], [{:silent, true}]}]), @limits)
+
+    assert {:error, {:invalid_match_spec, [_ | _]}} =
+             start(spec(match_spec: [{:_, [{:no_such_guard, :"$1"}], []}]), @limits)
+
+    assert {:error, {:invalid, :match_spec}} =
+             start(spec(match_spec: List.duplicate({:_, [], []}, 11)), @limits)
+  end
+
+  test "refuses actions nested deep in a body or guard" do
+    for {match_spec, action} <- [
+          {[{:_, [], [{:message, {{:ok, {:display, :x}}}}]}], :display},
+          {[{:_, [{:is_list, {:current_stacktrace}}], []}], :current_stacktrace},
+          {[{:_, [], [{:set_tcw, 1}]}], :set_tcw}
+        ] do
+      assert {:error, {:refused_action, ^action}} = start(spec(match_spec: match_spec), @limits)
+    end
+  end
+
+  test "refuses any message action when return trace is on" do
+    for body <- [[{:message, false}], [{:message, {:const, false}}]] do
+      assert {:error, {:refused_action, :message}} =
+               start(spec(match_spec: [{:_, [], body}], return_trace: true), @limits)
+    end
+  end
+
+  test "rejects each malformed spec field" do
+    for {overrides, field} <- [
+          {[module: :String], :module},
+          {[module: :_], :module},
+          {[function: :jaro_distance], :function},
+          {[arity: 256], :arity},
+          {[arity: -1], :arity},
+          {[arity: :any], :arity},
+          {[processes: []], :processes},
+          {[processes: :some], :processes},
+          {[processes: [:not_a_pid]], :processes},
+          {[processes: List.duplicate(self(), 101)], :processes},
+          {[capture: :both], :capture},
+          {[scope: true], :scope},
+          {[return_trace: :yes], :return_trace},
+          {[match_spec: []], :match_spec},
+          {[match_spec: :nope], :match_spec},
+          {[match_spec: [:not_a_clause]], :match_spec}
+        ] do
+      assert {:error, {:invalid, ^field}} = start(spec(overrides), @limits),
+             "expected {:invalid, #{inspect(field)}} for #{inspect(overrides)}"
+    end
+
+    assert {:error, {:invalid, :scope}} = start(Map.delete(spec(), :scope), @limits)
+  end
+
+  test "rejects each malformed limit" do
+    for {limits, field} <- [
+          {%{budget: 50}, :limits},
+          {%{@limits | max_events: 0}, :max_events},
+          {%{@limits | max_rate: -1}, :max_rate},
+          {%{@limits | max_time_ms: "5000"}, :max_time_ms},
+          {%{@limits | max_time_ms: 3_600_001}, :max_time_ms},
+          {%{@limits | budget: -1}, :budget},
+          {%{@limits | budget: 100_001}, :budget},
+          {Map.delete(@limits, :budget), :budget}
+        ] do
+      assert {:error, {:invalid, ^field}} = start(spec(), limits),
+             "expected {:invalid, #{inspect(field)}} for #{inspect(limits)}"
+    end
+  end
+
+  test "rejects remote and dead pids" do
+    assert {:error, {:invalid, :processes}} = start(spec(processes: [remote_pid()]), @limits)
+
+    dead = start_supervised!({Task, fn -> :ok end})
+    ref = Process.monitor(dead)
+    assert_receive {:DOWN, ^ref, :process, ^dead, _reason}
+
+    assert {:error, {:noproc, ^dead}} = start(spec(processes: [self(), dead]), @limits)
   end
 
   test "rejects specs it cannot or should not trace" do
     assert {:error, {:refused, :erlang}} =
-             @agent_module.trace_start(self(), %{@spec_args | module: "erlang"}, @limits)
+             start(spec(module: "erlang", function: "self", arity: 0, processes: :all), @limits)
 
     assert {:error, :unknown_function} =
-             @agent_module.trace_start(
-               self(),
-               %{@spec_args | module: "Elixir.NoSuchModule#{System.unique_integer()}"},
-               @limits
-             )
+             start(spec(module: "Elixir.NoSuchModule#{System.unique_integer()}"), @limits)
 
-    assert {:error, :no_function_matched} =
-             @agent_module.trace_start(self(), %{@spec_args | arity: 9}, @limits)
+    assert {:error, {:not_loaded, VoyagerAgentTraceTest.NotLoaded}} =
+             start(spec(module: Atom.to_string(VoyagerAgentTraceTest.NotLoaded)), @limits)
+
+    assert {:error, :no_function_matched} = start(spec(arity: 9), @limits)
+    assert {:error, {:invalid, :module}} = start(spec(module: "_"), @limits)
+  end
+
+  test "hot modules are refused on all processes but allowed on a pid list" do
+    lists = [module: "lists", function: "reverse", arity: 1]
+
+    assert {:error, {:refused, :lists}} = start(spec(lists ++ [processes: :all]), @limits)
+    assert {:ok, _tracer} = start(spec(lists), @limits)
+  end
+
+  test "the agent and trace modules are refused even on a pid list" do
+    agent = [module: Atom.to_string(@agent_module), function: :_, arity: :_]
+
+    assert {:error, {:refused, @agent_module}} = start(spec(agent), @limits)
+
+    assert {:error, {:refused, :trace}} =
+             start(spec(module: "trace", function: :_, arity: :_), @limits)
+  end
+
+  defp spec(overrides \\ []) do
+    Enum.into(overrides, %{
+      module: "Elixir.String",
+      function: "jaro_distance",
+      arity: 2,
+      processes: [self()],
+      capture: :args,
+      scope: :global,
+      return_trace: false,
+      match_spec: :undefined
+    })
+  end
+
+  defp start(spec, limits, collector \\ self()) do
+    @agent_module.trace_start(collector, spec, limits)
+  end
+
+  defp remote_pid do
+    node = "voyager_remote@nohost"
+    :erlang.binary_to_term(<<131, 88, 119, byte_size(node), node::binary, 0::96>>)
   end
 
   defp collect(tracer, acc \\ []) do
