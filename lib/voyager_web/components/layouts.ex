@@ -71,7 +71,7 @@ defmodule VoyagerWeb.Layouts do
   def settings(assigns) do
     ~H"""
     <.flash_group flash={@flash} />
-    <div class="bg-base-200 flex h-full flex-col overflow-hidden">
+    <div class="page-backdrop bg-base-200 flex h-full flex-col overflow-hidden">
       <VoyagerWeb.Components.Shell.settings_topbar return_to={assigns[:return_to]} />
       <main class="flex-1 overflow-y-auto">
         {@inner_content}

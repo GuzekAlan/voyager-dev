@@ -29,6 +29,7 @@ import Tooltip from './hooks/tooltip';
 import NumberStepper from './hooks/number_stepper';
 import DetailsPanelResize from './hooks/details_panel_resize';
 import TableSettings from './hooks/table_settings';
+import { initMatrix } from './matrix';
 
 const csrfToken = document
   .querySelector("meta[name='csrf-token']")
@@ -94,6 +95,8 @@ if (window.__TAURI_INTERNALS__) {
 
 const isMac = navigator.platform.startsWith('Mac');
 document.documentElement.classList.toggle('is-mac', isMac);
+
+initMatrix();
 
 window.addEventListener('keydown', (e) => {
   if (e.repeat || e.code !== 'KeyB' || !(isMac ? e.metaKey : e.ctrlKey)) return;

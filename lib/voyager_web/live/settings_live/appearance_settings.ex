@@ -39,6 +39,14 @@ defmodule VoyagerWeb.SettingsLive.AppearanceSettings do
           >
             <.icon name="icon-moon" class="size-4" /> Dark
           </button>
+          <button
+            type="button"
+            class="join-item btn btn-soft text-base-content/70 gap-1.5"
+            data-phx-theme="matrix"
+            phx-click={JS.dispatch("phx:set-theme")}
+          >
+            <.icon name="icon-pill" class="size-4" /> Matrix
+          </button>
           <script :type={Phoenix.LiveView.ColocatedHook} name=".ThemeSetting">
             export default {
               mounted() {

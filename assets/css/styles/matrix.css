@@ -1,0 +1,37 @@
+.matrix-rain {
+  display: none;
+}
+
+[data-theme='matrix'] {
+  --font-sans: var(--font-mono);
+  --font-display: var(--font-mono);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-theme='matrix'] body,
+  [data-theme='matrix'] .page-backdrop {
+    background-color: transparent;
+  }
+
+  [data-theme='matrix'] .page-backdrop {
+    text-shadow:
+      0 0 0.25rem var(--color-base-200),
+      0 0 0.5rem var(--color-base-200),
+      0 0 0.75rem var(--color-base-200),
+      0 0 1rem var(--color-base-200);
+  }
+
+  [data-theme='matrix'] .page-backdrop :is(.card, .bg-base-100) {
+    text-shadow: none;
+  }
+
+  [data-theme='matrix'] .matrix-rain {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    width: 100%;
+    height: 100%;
+    opacity: 0.55;
+  }
+}

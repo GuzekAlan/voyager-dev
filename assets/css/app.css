@@ -9,6 +9,7 @@
 @import './styles/tooltip.css';
 @import './styles/sidebar.css';
 @import './styles/utilities.css';
+@import './styles/matrix.css';
 
 @source '../css';
 @source '../js';
@@ -132,9 +133,55 @@
   --noise: 0;
 }
 
+@plugin 'daisyui/theme' {
+  name: 'matrix';
+  default: false;
+  prefersdark: false;
+  color-scheme: 'dark';
+  --color-pinned: oklch(0.86 0.17 95);
+  --color-code-atom: oklch(0.86 0.11 190);
+  --color-code-number: oklch(0.86 0.11 190);
+  --color-code-string: oklch(0.9 0.19 130);
+  --color-code-special: oklch(0.84 0.15 90);
+  --color-code-punct: oklch(0.62 0.09 150);
+  --color-port: oklch(0.9 0.17 105);
+  --color-process-monitor: oklch(0.78 0.13 310);
+  --color-base-100: oklch(15% 0.03 150);
+  --color-base-200: oklch(10% 0.02 150);
+  --color-base-300: oklch(27% 0.07 150);
+  --color-base-500: oklch(45% 0.11 150);
+  --color-logo: #00ff41;
+  --color-base-content: oklch(86% 0.19 147);
+  --color-primary: #00ff41;
+  --color-primary-content: oklch(12% 0.03 150);
+  --color-secondary: oklch(0.72 0.13 185);
+  --color-secondary-content: oklch(12% 0.03 150);
+  --color-accent: oklch(0.96 0.07 150);
+  --color-accent-content: oklch(12% 0.03 150);
+  --color-neutral: oklch(8% 0.02 150);
+  --color-neutral-content: oklch(86% 0.19 147);
+  --color-info: oklch(0.8 0.13 195);
+  --color-info-bg: oklch(22% 0.05 210);
+  --color-info-content: var(--color-neutral-content);
+  --color-success-bg: oklch(23% 0.07 150);
+  --color-success-content: var(--color-neutral-content);
+  --color-warning-bg: oklch(25% 0.06 95);
+  --color-warning-content: var(--color-neutral-content);
+  --color-error-bg: oklch(23% 0.07 25);
+  --color-error-content: var(--color-neutral-content);
+  --radius-selector: 0.25rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
 @custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
 @custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
 
-@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *, [data-theme=matrix], [data-theme=matrix] *));
 @custom-variant mac (&:where(.is-mac *));
