@@ -77,8 +77,8 @@ final class TrayController: NSObject, NSPopoverDelegate {
         }
 
         let hosting = NSHostingController(rootView: TrayView(model: model, logo: icon))
-        hosting.sizingOptions = .preferredContentSize
         popover.contentViewController = hosting
+        popover.contentSize = hosting.view.fittingSize
         if #available(macOS 14.0, *) {
             popover.hasFullSizeContent = true
         }
@@ -129,15 +129,9 @@ struct TrayView: View {
             .padding(.bottom, 2)
 
             nodeCard
+            reconnectSlot
             mcpCard
-
-            if let error = model.status?.error {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.error)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 2)
-            }
+            errorSlot
 
             HStack(spacing: 8) {
                 Button("Open Voyager") { model.perform(.open) }
@@ -176,9 +170,31 @@ struct TrayView: View {
                 }
             }
         }
-        if let status = model.status, status.node == nil || status.nodeLost, let last = status.lastConnected {
-            reconnectRow(last, connecting: status.connecting)
+    }
+
+    /// The popover is sized once at creation, so rows that come and go keep their space reserved.
+    private var reconnectSlot: some View {
+        ZStack {
+            Button("Connect") {}.buttonStyle(SmallButtonStyle(hoverColor: model.accent)).hidden()
+            if let status = model.status, status.node == nil || status.nodeLost, let last = status.lastConnected {
+                reconnectRow(last, connecting: status.connecting)
+            }
         }
+    }
+
+    private var errorSlot: some View {
+        ZStack(alignment: .topLeading) {
+            Label(" \n ", systemImage: "exclamationmark.triangle.fill").hidden()
+            if let error = model.status?.error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .lineLimit(2)
+                    .help(error)
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(Theme.error)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
     }
 
     private func reconnectRow(_ last: TrayStatus.LastConnected, connecting: Bool) -> some View {
