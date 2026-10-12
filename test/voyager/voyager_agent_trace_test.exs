@@ -250,6 +250,16 @@ defmodule VoyagerAgentTraceTest do
              start(spec(module: "trace", function: :_, arity: :_), @limits)
   end
 
+  test "stops when its mailbox backs up" do
+    {:ok, tracer} = start(spec(), %{max_time_ms: 5_000, budget: 10})
+
+    :erlang.suspend_process(tracer)
+    for _ <- 1..5_100, do: String.jaro_distance("a", "b")
+    :erlang.resume_process(tracer)
+
+    assert {_events, :mailbox_limit, _stats} = collect(tracer)
+  end
+
   defp spec(overrides \\ []) do
     Enum.into(overrides, %{
       module: "Elixir.String",

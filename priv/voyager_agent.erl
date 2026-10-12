@@ -640,6 +640,7 @@ bound_records([Record | Rest], Budget, Truncated, Acc) ->
 
 -define(TRACE_FLUSH_MS, 100).
 -define(TRACE_BATCH, 200).
+%% ponytail: counts messages, not bytes; a large-args flood on `all' peaks at GBs. NIF tracer if that bites.
 -define(TRACE_MAX_MAILBOX, 5_000).
 %% Below Voyager's 5 s erpc timeout, so the worker gives up (and kills the tracer) first.
 -define(TRACE_TIMEOUT, 4_000).
@@ -877,6 +878,7 @@ spawn_tracer(Collector, Plan) ->
     {Pid, MRef} =
         spawn_opt(fun() -> tracer_init(Caller, Ref, Collector, Plan) end,
                   [monitor,
+                   {priority, high},
                    {message_queue_data, off_heap},
                    {max_heap_size,
                     #{size => 10_000_000,
@@ -944,7 +946,16 @@ trace_processes(Session, [Pid | Rest], Flags) ->
             {error, {noproc, Pid}}
     end.
 
-tracer_loop(#tracer{budget = Budget} = T) ->
+%% `max_heap_size' does not count an off-heap mailbox, so the tracer checks its own queue.
+tracer_loop(T) ->
+    case erlang:process_info(self(), message_queue_len) of
+        {message_queue_len, Len} when Len > ?TRACE_MAX_MAILBOX ->
+            tracer_stop(T, mailbox_limit);
+        _ ->
+            tracer_receive(T)
+    end.
+
+tracer_receive(#tracer{budget = Budget} = T) ->
     receive
         {trace_ts, Pid, call, MFA, Ts} ->
             tracer_event(T, Pid, Ts, call_event(MFA, Budget));
@@ -957,7 +968,7 @@ tracer_loop(#tracer{budget = Budget} = T) ->
             tracer_event(T, Pid, Ts, {MFA, value_event(exception, Value, Budget)});
         voyager_trace_flush ->
             erlang:send_after(?TRACE_FLUSH_MS, self(), voyager_trace_flush),
-            tracer_flush(T);
+            tracer_loop(send_batch(T));
         voyager_trace_ttl ->
             tracer_stop(T, time_limit);
         voyager_trace_stop ->
@@ -966,15 +977,6 @@ tracer_loop(#tracer{budget = Budget} = T) ->
             trace:session_destroy(T#tracer.session);
         _Other ->
             tracer_loop(T)
-    end.
-
-%% `max_heap_size' does not count an off-heap mailbox, so the tracer checks its own queue.
-tracer_flush(T) ->
-    case erlang:process_info(self(), message_queue_len) of
-        {message_queue_len, Len} when Len > ?TRACE_MAX_MAILBOX ->
-            tracer_stop(T, mailbox_limit);
-        _ ->
-            tracer_loop(send_batch(T))
     end.
 
 call_event({M, F, Args}, Budget) when is_list(Args) ->
