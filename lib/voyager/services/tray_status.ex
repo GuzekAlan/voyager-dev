@@ -4,8 +4,8 @@ defmodule Voyager.Services.TrayStatus do
 
   Sends `%{node, node_lost, connector, connected_at, mcp_url, last_connected,
   connecting, error}` as JSON whenever the node session or the MCP listener
-  changes, and runs the `"connect"`, `"disconnect"`, `"toggle_mcp"`, `"refresh"`
-  and `"dismiss_error"` actions.
+  changes, and runs the `"connect"`, `"disconnect"`, `"mcp_on"`, `"mcp_off"`,
+  `"refresh"` and `"dismiss_error"` actions.
   """
 
   use GenServer
@@ -62,13 +62,8 @@ defmodule Voyager.Services.TrayStatus do
     {:noreply, state}
   end
 
-  def handle_info("toggle_mcp", state) do
-    error =
-      case MCP.toggle() do
-        {:ok, _status} -> nil
-        {:error, reason} -> mcp_error(reason)
-      end
-
+  def handle_info("mcp_" <> wanted, state) when wanted in ["on", "off"] do
+    error = if MCP.info().alive? != (wanted == "on"), do: toggle_mcp()
     {:noreply, push(%{state | error: error})}
   end
 
@@ -174,6 +169,13 @@ defmodule Voyager.Services.TrayStatus do
     do: "The Erlang cookie does not match"
 
   defp connect_error(_result), do: "Could not connect, open Voyager for details"
+
+  defp toggle_mcp do
+    case MCP.toggle() do
+      {:ok, _status} -> nil
+      {:error, reason} -> mcp_error(reason)
+    end
+  end
 
   defp mcp_error(:port_in_use), do: "MCP port is already in use"
   defp mcp_error(:locked), do: "MCP server is controlled by application config"

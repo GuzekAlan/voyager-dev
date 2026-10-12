@@ -27,7 +27,8 @@ enum TrayAction: String {
     case quit
     case connect
     case disconnect
-    case toggleMcp = "toggle_mcp"
+    case mcpOn = "mcp_on"
+    case mcpOff = "mcp_off"
     case refresh
     case dismissError = "dismiss_error"
 }
@@ -222,7 +223,7 @@ struct TrayView: View {
             if let url {
                 CopyButton(text: url)
             }
-            Toggle("MCP server", isOn: Binding(get: { url != nil }, set: { _ in model.perform(.toggleMcp) }))
+            Toggle("MCP server", isOn: Binding(get: { url != nil }, set: { model.perform($0 ? .mcpOn : .mcpOff) }))
                 .disabled(model.status == nil)
         }
     }
@@ -481,7 +482,9 @@ public func voyagerTraySetup(
 
 @_cdecl("voyager_tray_update")
 public func voyagerTrayUpdate(_ json: UnsafePointer<CChar>) {
-    let data = Data(String(cString: json).utf8)
-    guard let status = try? decoder.decode(TrayStatus.self, from: data) else { return }
-    controller?.model.status = status
+    do {
+        controller?.model.status = try decoder.decode(TrayStatus.self, from: Data(String(cString: json).utf8))
+    } catch {
+        NSLog("VoyagerTray: dropped a status update: %@", String(describing: error))
+    }
 }

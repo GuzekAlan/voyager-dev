@@ -50,6 +50,16 @@ defmodule Voyager.Services.TrayStatusTest do
     assert %{"mcp_url" => nil} = receive_status()
   end
 
+  test "leaves MCP alone when it is already in the requested state" do
+    send(TrayStatus, "mcp_off")
+    assert %{"mcp_url" => nil, "error" => nil} = receive_status()
+  end
+
+  test "switches MCP when it is not in the requested state" do
+    send(TrayStatus, "mcp_on")
+    assert %{"error" => "Could not toggle the MCP server: " <> _reason} = receive_status()
+  end
+
   test "offers the latest connection across direct and SSH profiles" do
     insert!(%Connection{node_name: "saved@host", cookie: "secret"}, 3)
 
