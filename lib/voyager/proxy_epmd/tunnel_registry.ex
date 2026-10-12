@@ -11,7 +11,7 @@ defmodule Voyager.ProxyEpmd.TunnelRegistry do
 
   use GenServer
 
-  alias Voyager.Services.Ssh
+  alias Voyager.Services.SSH
 
   @table :proxy_epmd
   @pubsub_topic "tunnel_registry"
@@ -24,7 +24,7 @@ defmodule Voyager.ProxyEpmd.TunnelRegistry do
     GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
   end
 
-  @spec register(charlist(), pos_integer(), Ssh.conn()) :: :ok
+  @spec register(charlist(), pos_integer(), SSH.conn()) :: :ok
   def register(node_key, local_port, conn) when is_list(node_key) and is_pid(conn) do
     GenServer.call(__MODULE__, {:register, node_key, local_port, conn})
   end
@@ -34,7 +34,7 @@ defmodule Voyager.ProxyEpmd.TunnelRegistry do
     GenServer.call(__MODULE__, {:unregister, node_key})
   end
 
-  @spec unregister_by_tunnel(Ssh.conn()) :: :ok
+  @spec unregister_by_tunnel(SSH.conn()) :: :ok
   def unregister_by_tunnel(conn) when is_pid(conn) do
     GenServer.call(__MODULE__, {:unregister_by_tunnel, conn})
   end

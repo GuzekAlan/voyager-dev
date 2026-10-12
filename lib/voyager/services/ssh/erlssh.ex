@@ -1,17 +1,17 @@
-defmodule Voyager.Services.Ssh.Erlssh do
+defmodule Voyager.Services.SSH.Erlssh do
   @moduledoc false
 
-  @behaviour Voyager.Services.Ssh
+  @behaviour Voyager.Services.SSH
 
   alias Voyager.Services.Distribution
-  alias Voyager.Services.Ssh
+  alias Voyager.Services.SSH
 
-  require Ssh
+  require SSH
 
   @ssh_timeout 5000
 
   @impl true
-  def connect(host, port, user, auth) when Ssh.is_ssh_auth(auth) do
+  def connect(host, port, user, auth) when SSH.is_ssh_auth(auth) do
     opts =
       [
         user: String.to_charlist(user),
