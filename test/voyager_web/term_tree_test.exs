@@ -169,6 +169,14 @@ defmodule VoyagerWeb.TermTreeTest do
       assert %Node{kind: :struct, child_count: 1} = node
       assert text(node.content) == "%erl_record{...}"
     end
+
+    test "a struct made inert by the dist client still renders as its module" do
+      node = TermTree.describe(%{"__struct__" => "Station.Warehouse", count: 0})
+
+      assert %Node{kind: :struct, child_count: 1} = node
+      assert text(node.content) == "%Station.Warehouse{...}"
+      assert child_keys(TermTree.children(%{"__struct__" => "S", count: 0}, 0, 10)) == ["count: "]
+    end
   end
 
   describe "describe/2 options" do

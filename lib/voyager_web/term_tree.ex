@@ -94,6 +94,10 @@ defmodule VoyagerWeb.TermTree do
     struct |> Map.from_struct() |> children(offset, limit)
   end
 
+  def children(%{"__struct__" => name} = map, offset, limit) when is_binary(name) do
+    map |> Map.delete("__struct__") |> children(offset, limit)
+  end
+
   def children(map, offset, limit) when is_map(map) do
     {markers, rest} = pop_markers(map)
 
@@ -299,6 +303,19 @@ defmodule VoyagerWeb.TermTree do
       child_count: struct |> Map.from_struct() |> map_size(),
       truncated?: Map.has_key?(struct, @truncated),
       content: content,
+      expanded_before: module_segments ++ [Segment.punctuation("{")],
+      expanded_after: [Segment.punctuation("}")]
+    }
+  end
+
+  defp build(%{"__struct__" => name} = map) when is_binary(name) do
+    module_segments = [Segment.punctuation("%"), Segment.module(String.trim_leading(name, ":"))]
+
+    %Node{
+      kind: :struct,
+      child_count: map_size(map) - 1,
+      truncated?: Map.has_key?(map, @truncated),
+      content: module_segments ++ [Segment.punctuation("{...}")],
       expanded_before: module_segments ++ [Segment.punctuation("{")],
       expanded_after: [Segment.punctuation("}")]
     }

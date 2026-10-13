@@ -8,17 +8,18 @@ defmodule Voyager.Services.DistClient.Frame do
 
   @atom_tags [100, 115, 118, 119]
 
-  @spec decode(binary()) :: :tick | {:control, term(), binary()} | :rejected
-  def decode(<<>>), do: :tick
+  @doc "Decodes a frame, creating at most `atom_budget` new atoms."
+  @spec decode(binary(), non_neg_integer()) :: :tick | {:control, term(), binary()} | :rejected
+  def decode(<<>>, _atom_budget), do: :tick
 
-  def decode(<<@pass_through, rest::binary>>) do
-    with {:ok, {control, used}} <- to_term(rest, [:used]) do
+  def decode(<<@pass_through, rest::binary>>, atom_budget) do
+    with {:ok, {control, used}} <- to_term(rest, [:used], atom_budget) do
       <<_control::binary-size(^used), payload::binary>> = rest
       {:control, inert(control), payload}
     end
   end
 
-  def decode(_other), do: :rejected
+  def decode(_other, _atom_budget), do: :rejected
 
   @doc "Decodes an unsolicited message payload; it may not create atoms."
   @spec decode_payload(binary()) :: {:ok, term()} | :rejected
@@ -31,9 +32,9 @@ defmodule Voyager.Services.DistClient.Frame do
   end
 
   @doc """
-  Replaces funs with their inspected text and turns structs of locally existing
-  modules into plain maps, so no local function or protocol implementation can
-  be reached through a term from the remote node.
+  Replaces funs with their inspected text and turns every struct into a plain map
+  whose `"__struct__"` string key names the module, so no local function or
+  protocol implementation can be reached through a term from the remote node.
   """
   @spec inert(term()) :: term()
   def inert(term) when is_function(term), do: inspect(term)
@@ -42,13 +43,8 @@ defmodule Voyager.Services.DistClient.Frame do
   def inert(tuple) when is_tuple(tuple),
     do: tuple |> Tuple.to_list() |> Enum.map(&inert/1) |> List.to_tuple()
 
-  def inert(%{__struct__: mod} = struct) when is_atom(mod) do
-    map = inert_map(struct)
-
-    if :code.which(mod) == :non_existing,
-      do: map,
-      else: map |> Map.delete(:__struct__) |> Map.put("__struct__", inspect(mod))
-  end
+  def inert(%{__struct__: mod} = struct) when is_atom(mod),
+    do: struct |> inert_map() |> Map.delete(:__struct__) |> Map.put("__struct__", inspect(mod))
 
   def inert(map) when is_map(map), do: inert_map(map)
   def inert(term), do: term
@@ -77,17 +73,18 @@ defmodule Voyager.Services.DistClient.Frame do
   end
 
   # Distribution never compresses terms, and an inflated one bypasses max_heap_size.
-  defp to_term(<<131, 80, _rest::binary>>, _opts), do: :rejected
+  defp to_term(<<131, 80, _rest::binary>>, _opts, _atom_budget), do: :rejected
 
-  defp to_term(binary, opts) do
+  defp to_term(binary, opts, atom_budget) do
     {:ok, :erlang.binary_to_term(binary, [:safe | opts])}
   rescue
-    ArgumentError -> to_term_with_new_atoms(binary, opts)
+    ArgumentError -> to_term_with_new_atoms(binary, opts, atom_budget)
   end
 
   # Each new atom needs a tag byte, so counting tags caps the atoms one frame can create.
-  defp to_term_with_new_atoms(binary, opts) do
-    budget = div(:erlang.system_info(:atom_limit) * 9, 10) - :erlang.system_info(:atom_count)
+  defp to_term_with_new_atoms(binary, opts, atom_budget) do
+    headroom = div(:erlang.system_info(:atom_limit) * 9, 10) - :erlang.system_info(:atom_count)
+    budget = min(atom_budget, headroom)
 
     if byte_size(binary) < budget or atom_tags(binary) < budget,
       do: {:ok, :erlang.binary_to_term(binary, opts)},

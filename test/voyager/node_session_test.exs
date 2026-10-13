@@ -39,6 +39,17 @@ defmodule Voyager.NodeSessionTest do
     def teardown?(_msg, _meta), do: false
   end
 
+  defmodule GarbageErpc do
+    @moduledoc false
+    @behaviour Voyager.Erpc
+
+    @impl true
+    def call(_node, _mod, _fun, _args), do: [{}]
+
+    @impl true
+    def call(_node, _mod, _fun, _args, _timeout), do: [{}]
+  end
+
   setup do
     previous_state = :sys.get_state(NodeSession)
     previous_connector_name = NodeSession.cached_connector_name()
@@ -115,6 +126,18 @@ defmodule Voyager.NodeSessionTest do
       assert_receive {:connector_disconnect, ^unreachable}
       refute NodeSession.connected?()
       refute_received {:node_connected, _}
+    end
+
+    test "fails the connect and tears down the connector when the node answers with garbage" do
+      Application.put_env(:voyager, :erpc, GarbageErpc)
+
+      assert {:error, {:agent_install_failed, _reason}} =
+               NodeSession.connect_via(FakeConnector, "demo@localhost", "secret",
+                 test_pid: self()
+               )
+
+      assert_receive {:connector_disconnect, _node}
+      refute NodeSession.connected?()
     end
 
     test "rejects a second connect attempt while already connected" do

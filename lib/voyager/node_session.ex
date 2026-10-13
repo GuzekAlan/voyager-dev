@@ -206,7 +206,7 @@ defmodule Voyager.NodeSession do
   # usable session, so a failed install fails the whole connect.
   defp connect_and_install(connector, node_name, cookie, opts) do
     with {:ok, node, meta} <- safe_connect(connector, node_name, cookie, opts) do
-      case Agent.install(node) do
+      case safe_install(node) do
         :ok ->
           {:ok, node, meta}
 
@@ -215,6 +215,14 @@ defmodule Voyager.NodeSession do
           error
       end
     end
+  end
+
+  defp safe_install(node) do
+    Agent.install(node)
+  rescue
+    error -> {:error, {:agent_install_failed, error}}
+  catch
+    kind, reason -> {:error, {:agent_install_failed, {kind, reason}}}
   end
 
   defp safe_connect(connector, node_name, cookie, opts) do
