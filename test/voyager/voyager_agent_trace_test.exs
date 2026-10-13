@@ -176,6 +176,7 @@ defmodule VoyagerAgentTraceTest do
           {[arity: 256], :arity},
           {[arity: -1], :arity},
           {[arity: :any], :arity},
+          {[function: :_, arity: 2], :arity},
           {[processes: []], :processes},
           {[processes: :some], :processes},
           {[processes: [:not_a_pid]], :processes},

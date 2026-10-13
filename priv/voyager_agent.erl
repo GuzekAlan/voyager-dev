@@ -640,7 +640,7 @@ bound_records([Record | Rest], Budget, Truncated, Acc) ->
 
 -define(TRACE_FLUSH_MS, 100).
 -define(TRACE_BATCH, 200).
-%% ponytail: counts messages, not bytes; a large-args flood on `all' peaks at GBs. NIF tracer if that bites.
+%% Counts messages, not bytes: a large-args flood on `all' can still peak at GBs.
 -define(TRACE_MAX_MAILBOX, 5_000).
 %% Below Voyager's 5 s erpc timeout, so the worker gives up (and kills the tracer) first.
 -define(TRACE_TIMEOUT, 4_000).
@@ -811,6 +811,9 @@ valid_limit(max_time_ms, MaxTime) ->
 valid_limit(_Field, Limit) ->
     is_integer(Limit) andalso Limit > 0.
 
+%% `trace:function/4' takes '_' only in the rightmost fields: {M, '_', 2} is badarg.
+trace_mfa(#{function := '_', arity := Arity}) when Arity =/= '_' ->
+    {error, {invalid, arity}};
 trace_mfa(#{module := Module, function := Function, arity := Arity}) ->
     try {binary_to_existing_atom(Module), existing_function(Function)} of
         {M, F} ->
@@ -849,7 +852,7 @@ hot_prefix(<<"erts_", _/binary>>) ->
 hot_prefix(_Module) ->
     false.
 
-%% ponytail: match spec atoms are created on dist decode; send them as binaries if that matters.
+%% Atoms in a match spec are created on the remote when the dist message is decoded.
 trace_match_spec(undefined, ReturnTrace) ->
     {ok, [{'_', [], return_body(ReturnTrace)}]};
 trace_match_spec(MatchSpec, ReturnTrace) ->
