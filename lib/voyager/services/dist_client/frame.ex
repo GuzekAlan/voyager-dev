@@ -8,27 +8,32 @@ defmodule Voyager.Services.DistClient.Frame do
   @exit2 8
   @spawn_request 29
 
-  @doc """
-  Decodes a frame whose control term may add at most `budget` entries to the
-  VM's atom and fun tables. Returns what it spent.
-  """
-  @spec decode(binary(), Etf.cost()) ::
-          :tick | {:control, term(), binary(), Etf.cost()} | :rejected
+  @max_nodes 1_000
+
+  @typedoc "What a session may still add to the VM's never-freed tables, and the nodes it has seen."
+  @type budget :: %{atoms: integer(), funs: integer(), nodes: MapSet.t()}
+
+  @spec session_budget() :: budget()
+  def session_budget, do: %{atoms: 50_000, funs: 10_000, nodes: MapSet.new()}
+
+  @doc "Decodes a frame within `budget` and returns the budget that is left."
+  @spec decode(binary(), budget()) :: :tick | {:control, term(), binary(), budget()} | :rejected
   def decode(<<>>, _budget), do: :tick
 
   def decode(<<@pass_through, rest::binary>>, budget) do
-    with {:ok, {control, used}, cost} <- to_term(rest, [:used], budget) do
+    with {:ok, {control, used}, budget} <- to_term(rest, [:used], budget) do
       <<_control::binary-size(^used), payload::binary>> = rest
-      {:control, inert(control), payload, cost}
+      {:control, inert(control), payload, budget}
     end
   end
 
   def decode(_other, _budget), do: :rejected
 
   @doc "Decodes an unsolicited message payload; it may not add atoms or funs."
-  @spec decode_payload(binary()) :: {:ok, term()} | :rejected
-  def decode_payload(payload) do
-    with {:ok, term, _cost} <- to_term(payload, [], %{atoms: 0, funs: 0}), do: {:ok, term}
+  @spec decode_payload(binary(), budget()) :: {:ok, term(), budget()} | :rejected
+  def decode_payload(payload, budget) do
+    with {:ok, term, %{nodes: nodes}} <- to_term(payload, [], %{budget | atoms: 0, funs: 0}),
+         do: {:ok, term, %{budget | nodes: nodes}}
   end
 
   @doc """
@@ -77,8 +82,11 @@ defmodule Voyager.Services.DistClient.Frame do
       div(:erlang.system_info(:atom_limit) * 9, 10) - :erlang.system_info(:atom_count)
 
     with {:ok, cost} <- Etf.scan(binary),
-         true <- cost.atoms <= min(budget.atoms, atom_headroom) and cost.funs <= budget.funs do
-      {:ok, :erlang.binary_to_term(binary, opts), cost}
+         nodes = MapSet.union(budget.nodes, cost.nodes),
+         true <- cost.atoms <= min(budget.atoms, atom_headroom) and cost.funs <= budget.funs,
+         true <- MapSet.size(nodes) <= @max_nodes do
+      left = %{atoms: budget.atoms - cost.atoms, funs: budget.funs - cost.funs, nodes: nodes}
+      {:ok, :erlang.binary_to_term(binary, opts), left}
     else
       _ -> :rejected
     end

@@ -23,7 +23,6 @@ defmodule Voyager.Services.DistClient do
   @idle_timeout :timer.minutes(5)
   @max_frame 16 * 1024 * 1024
   @max_heap_words 32 * 1024 * 1024
-  @session_budget %{atoms: 50_000, funs: 10_000}
 
   @send 2
   @monitor_p_exit 21
@@ -116,7 +115,7 @@ defmodule Voyager.Services.DistClient do
          counter: 0,
          pending: %{},
          last_recv: now(),
-         budget: @session_budget
+         budget: Frame.session_budget()
        }}
     else
       {:error, reason} -> {:stop, reason}
@@ -149,8 +148,7 @@ defmodule Voyager.Services.DistClient do
 
     frame_state =
       case Frame.decode(data, state.budget) do
-        {:control, control, payload, cost} ->
-          budget = %{atoms: state.budget.atoms - cost.atoms, funs: state.budget.funs - cost.funs}
+        {:control, control, payload, budget} ->
           handle_frame({:control, control, payload}, %{state | budget: budget})
 
         frame ->
@@ -220,12 +218,15 @@ defmodule Voyager.Services.DistClient do
 
   defp handle_frame({:control, {op, _from, _to}, payload}, state)
        when op in [@send, @send_sender, @alias_send] do
-    case Frame.decode_payload(payload) do
-      {:ok, {:io_request, from, reply_as, request}} when is_pid(from) ->
+    case Frame.decode_payload(payload, state.budget) do
+      {:ok, {:io_request, from, reply_as, request}, budget} when is_pid(from) ->
         send_frame(state, Frame.send(from, {:io_reply, reply_as, io_result(request)}))
-        state
+        %{state | budget: budget}
 
-      _other ->
+      {:ok, _message, budget} ->
+        %{state | budget: budget}
+
+      :rejected ->
         state
     end
   end
