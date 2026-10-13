@@ -1,7 +1,7 @@
 // Menu bar icon and SwiftUI status popover, driven from Rust through the C functions at the bottom.
 import AppKit
-import os
 import SwiftUI
+import os
 
 public typealias ActionCallback = @convention(c) (UnsafePointer<CChar>) -> Void
 
@@ -162,8 +162,13 @@ struct TrayView: View {
             idleNodeCard(title: "Starting…")
         case let status?:
             if let connection = status.connection {
-                Card(symbol: "antenna.radiowaves.left.and.right", tint: Theme.accent, title: connection.node, subtitle: connectedSubtitle(connection)) {
-                    Button { model.perform(.disconnect) } label: {
+                Card(
+                    symbol: "antenna.radiowaves.left.and.right", tint: Theme.accent,
+                    title: connection.node, subtitle: connectedSubtitle(connection)
+                ) {
+                    Button {
+                        model.perform(.disconnect)
+                    } label: {
                         Image(systemName: "power")
                             .font(.system(size: 12, weight: .medium))
                             .frame(width: 14, height: 20)
@@ -217,13 +222,17 @@ struct TrayView: View {
             symbol: "sparkles",
             tint: url == nil ? Theme.idle : Theme.accent,
             title: "MCP server",
-            subtitle: Text(url.map { $0.replacingOccurrences(of: "http://", with: "") } ?? "Stopped")
+            subtitle: Text(
+                url.map { $0.replacingOccurrences(of: "http://", with: "") } ?? "Stopped")
         ) {
             if let url {
                 CopyButton(text: url)
             }
-            Toggle("MCP server", isOn: Binding(get: { url != nil }, set: { model.perform($0 ? .mcpOn : .mcpOff) }))
-                .disabled(model.status == nil)
+            Toggle(
+                "MCP server",
+                isOn: Binding(get: { url != nil }, set: { model.perform($0 ? .mcpOn : .mcpOff) })
+            )
+            .disabled(model.status == nil)
         }
     }
 
@@ -246,10 +255,11 @@ enum Theme {
     static let error = Color(NSColor(hex: 0xFD6160))
 
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
-        Color(NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            return NSColor(hex: isDark ? dark : light)
-        })
+        Color(
+            NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                return NSColor(hex: isDark ? dark : light)
+            })
     }
 }
 
@@ -284,7 +294,9 @@ struct VoyagerSwitchStyle: ToggleStyle {
 
         var body: some View {
             let isOn = configuration.isOn
-            Button { configuration.isOn.toggle() } label: {
+            Button {
+                configuration.isOn.toggle()
+            } label: {
                 Capsule()
                     .fill(isOn ? Theme.accent : Theme.content.opacity(0.18))
                     .frame(width: 30, height: 18)
@@ -424,8 +436,12 @@ struct VoyagerButtonStyle: ButtonStyle {
             let pressed = configuration.isPressed
             switch kind {
             case .filled: return Theme.accent.opacity(pressed ? 0.75 : active ? 0.88 : 1)
-            case .danger: return active ? Theme.error.opacity(pressed ? 0.25 : 0.16) : Theme.content.opacity(0.08)
-            case .subtle: return active ? Theme.accent.opacity(pressed ? 0.75 : 1) : Theme.content.opacity(0.08)
+            case .danger:
+                return active
+                    ? Theme.error.opacity(pressed ? 0.25 : 0.16) : Theme.content.opacity(0.08)
+            case .subtle:
+                return active
+                    ? Theme.accent.opacity(pressed ? 0.75 : 1) : Theme.content.opacity(0.08)
             }
         }
     }
