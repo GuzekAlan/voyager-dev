@@ -9,8 +9,7 @@ defmodule Voyager.Services.DistClient.FrameTest do
   test "decodes a pass-through frame into its control message, payload and cost" do
     frame = IO.iodata_to_binary(Frame.send(self(), :hello))
 
-    assert {:control, {2, :"", pid}, payload, %{atoms: 50_000, funs: 10_000}} =
-             Frame.decode(frame, @budget)
+    assert {:control, {2, :"", pid}, payload, %{atoms: 50_000}} = Frame.decode(frame, @budget)
 
     assert pid == self()
     assert {:ok, :hello, _budget} = Frame.decode_payload(payload, @budget)
@@ -41,11 +40,12 @@ defmodule Voyager.Services.DistClient.FrameTest do
     assert {:control, {_, _, _}, "", %{atoms: 0}} = Frame.decode(frame, %{@budget | atoms: 1})
   end
 
-  test "adds funs and exports only within the budget" do
+  test "counts each distinct fun and export once per session" do
     frame = <<112, :erlang.term_to_binary({&Enum.map/2, fn -> :ok end})::binary>>
 
-    assert Frame.decode(frame, %{@budget | funs: 1}) == :rejected
-    assert {:control, {_, _}, "", %{funs: 9_998}} = Frame.decode(frame, @budget)
+    assert {:control, {_, _}, "", %{funs: funs} = budget} = Frame.decode(frame, @budget)
+    assert MapSet.size(funs) == 2
+    assert {:control, {_, _}, "", %{funs: ^funs}} = Frame.decode(frame, budget)
   end
 
   test "unsolicited payloads may not add atoms or funs" do
@@ -81,8 +81,11 @@ defmodule Voyager.Services.DistClient.FrameTest do
       map: %{nested: %{}}
     }
 
-    assert {:ok, %{atoms: 0, funs: 0}} = Etf.scan(:erlang.term_to_binary(term))
-    assert {:ok, %{atoms: 0, funs: 0}} = Etf.scan(:erlang.term_to_binary(term, minor_version: 1))
+    empty = MapSet.new()
+    assert {:ok, %{atoms: 0, funs: ^empty}} = Etf.scan(:erlang.term_to_binary(term))
+
+    assert {:ok, %{atoms: 0, funs: ^empty}} =
+             Etf.scan(:erlang.term_to_binary(term, minor_version: 1))
   end
 
   test "counts the same bytes as latin1 and as utf8 as two atoms" do

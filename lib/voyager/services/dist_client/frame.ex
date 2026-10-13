@@ -8,13 +8,14 @@ defmodule Voyager.Services.DistClient.Frame do
   @exit2 8
   @spawn_request 29
 
+  @max_funs 10_000
   @max_nodes 1_000
 
   @typedoc "What a session may still add to the VM's never-freed tables, and the nodes it has seen."
-  @type budget :: %{atoms: integer(), funs: integer(), nodes: MapSet.t()}
+  @type budget :: %{atoms: integer(), funs: MapSet.t(), nodes: MapSet.t()}
 
   @spec session_budget() :: budget()
-  def session_budget, do: %{atoms: 50_000, funs: 10_000, nodes: MapSet.new()}
+  def session_budget, do: %{atoms: 50_000, funs: MapSet.new(), nodes: MapSet.new()}
 
   @doc "Decodes a frame within `budget` and returns the budget that is left."
   @spec decode(binary(), budget()) :: :tick | {:control, term(), binary(), budget()} | :rejected
@@ -32,8 +33,8 @@ defmodule Voyager.Services.DistClient.Frame do
   @doc "Decodes an unsolicited message payload; it may not add atoms or funs."
   @spec decode_payload(binary(), budget()) :: {:ok, term(), budget()} | :rejected
   def decode_payload(payload, budget) do
-    with {:ok, term, %{nodes: nodes}} <- to_term(payload, [], %{budget | atoms: 0, funs: 0}),
-         do: {:ok, term, %{budget | nodes: nodes}}
+    with {:ok, term, left} <- to_term(payload, [], %{budget | atoms: 0}, MapSet.size(budget.funs)),
+         do: {:ok, term, %{left | atoms: budget.atoms}}
   end
 
   @doc """
@@ -77,15 +78,16 @@ defmodule Voyager.Services.DistClient.Frame do
     :erlang.binary_to_term(<<131, 90, 3::16, atom(name)::binary, creation::32, ids::binary>>)
   end
 
-  defp to_term(binary, opts, budget) do
+  defp to_term(binary, opts, budget, max_funs \\ @max_funs) do
     atom_headroom =
       div(:erlang.system_info(:atom_limit) * 9, 10) - :erlang.system_info(:atom_count)
 
     with {:ok, cost} <- Etf.scan(binary),
+         funs = MapSet.union(budget.funs, cost.funs),
          nodes = MapSet.union(budget.nodes, cost.nodes),
-         true <- cost.atoms <= min(budget.atoms, atom_headroom) and cost.funs <= budget.funs,
-         true <- MapSet.size(nodes) <= @max_nodes do
-      left = %{atoms: budget.atoms - cost.atoms, funs: budget.funs - cost.funs, nodes: nodes}
+         true <- cost.atoms <= min(budget.atoms, atom_headroom),
+         true <- MapSet.size(funs) <= max_funs and MapSet.size(nodes) <= @max_nodes do
+      left = %{atoms: budget.atoms - cost.atoms, funs: funs, nodes: nodes}
       {:ok, :erlang.binary_to_term(binary, opts), left}
     else
       _ -> :rejected

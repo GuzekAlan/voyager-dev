@@ -1,19 +1,19 @@
 defmodule Voyager.Services.DistClient.Etf do
   @moduledoc false
 
-  @type cost :: %{atoms: non_neg_integer(), funs: non_neg_integer(), nodes: MapSet.t()}
+  @type cost :: %{atoms: non_neg_integer(), funs: MapSet.t(), nodes: MapSet.t()}
 
   @atom_tags [100, 115, 118, 119]
 
   @doc """
   Walks an external term without decoding it and counts what decoding would add
-  to the VM's global tables: distinct new atoms, funs plus exports, and the
-  `{node, creation}` pairs behind pids, ports and references. Tags distribution
+  to the VM's global tables: distinct new atoms, the fun and export table keys,
+  and the `{node, creation}` pairs behind pids, ports and references. Tags distribution
   never sends to us (compressed, atom cache, old pid forms) return `:error`.
   """
   @spec scan(binary()) :: {:ok, cost()} | :error
   def scan(<<131, rest::binary>>),
-    do: walk(rest, 1, %{atoms: MapSet.new(), funs: 0, nodes: MapSet.new()})
+    do: walk(rest, 1, %{atoms: MapSet.new(), funs: MapSet.new(), nodes: MapSet.new()})
 
   def scan(_other), do: :error
 
@@ -51,13 +51,22 @@ defmodule Voyager.Services.DistClient.Etf do
 
   # NEW_FUN_EXT: module, old index, old uniq and pid, then the free variables.
   defp term(
-         <<112, _size::32, _arity, _uniq::binary-size(16), _index::32, free::32, rest::binary>>,
+         <<112, _size::32, _arity, uniq::binary-size(16), index::32, free::32, rest::binary>>,
          acc
        ),
-       do: {:ok, rest, 4 + free, %{acc | funs: acc.funs + 1}}
+       do: {:ok, rest, 4 + free, %{acc | funs: MapSet.put(acc.funs, {uniq, index})}}
 
-  # EXPORT_EXT: module, function, arity.
-  defp term(<<113, rest::binary>>, acc), do: {:ok, rest, 3, %{acc | funs: acc.funs + 1}}
+  defp term(<<113, rest::binary>>, acc) do
+    with {:ok, module_encoding, module, rest} <- atom_name(rest),
+         {:ok, fun_encoding, fun, <<97, arity, rest::binary>>} <- atom_name(rest),
+         {:ok, rest, 0, acc} <- atom(module, module_encoding, rest, acc),
+         {:ok, rest, 0, acc} <- atom(fun, fun_encoding, rest, acc) do
+      {:ok, rest, 0, %{acc | funs: MapSet.put(acc.funs, {module, fun, arity})}}
+    else
+      _ -> :error
+    end
+  end
+
   defp term(_other, _acc), do: :error
 
   defp atom_name(<<118, n::16, name::binary-size(n), rest::binary>>), do: {:ok, :utf8, name, rest}
