@@ -357,6 +357,8 @@ defmodule VoyagerWeb.EtsTableLive do
   end
 
   @impl true
+  def handle_async(_name, {:exit, {:shutdown, :cancel}}, socket), do: noreply(socket)
+
   def handle_async(:info, {:ok, {:ok, info}}, socket) do
     socket
     |> assign(:table_id, info.id)

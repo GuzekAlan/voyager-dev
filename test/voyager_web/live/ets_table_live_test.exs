@@ -129,6 +129,7 @@ defmodule VoyagerWeb.EtsTableLiveTest do
 
     assert has_element?(view, "#ets-private-notice")
     refute has_element?(view, "#ets-records-0")
+    refute has_element?(view, "#ets-peek-error")
   end
 
   test "a set row can open the lookup sidebar", %{conn: conn} do
