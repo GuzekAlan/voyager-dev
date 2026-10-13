@@ -227,7 +227,7 @@ defmodule Voyager.Services.DistClient do
         %{state | budget: budget}
 
       :rejected ->
-        state
+        :rejected
     end
   end
 

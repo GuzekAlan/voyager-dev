@@ -69,6 +69,15 @@ defmodule Voyager.Services.DistClientTest do
     refute_receive :pwned, 100
   end
 
+  test "ends the session when the node sends a payload it may not decode", ctx do
+    client = start_supervised!({DistClient, ctx.opts})
+    ref = Process.monitor(client)
+
+    peer_send(ctx.peer, Socket.call(ctx.node, :erlang, :group_leader, [], 5_000), &Enum.map/2)
+
+    assert_receive {:DOWN, ^ref, :process, ^client, {:shutdown, :rejected_frame}}, 5_000
+  end
+
   test "rejects a wrong cookie", ctx do
     assert DistClient.start(Keyword.put(ctx.opts, :cookie, "wrong")) == {:error, :bad_cookie}
   end
