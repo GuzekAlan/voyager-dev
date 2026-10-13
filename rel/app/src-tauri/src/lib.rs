@@ -28,6 +28,10 @@ const MIN_ZOOM: f64 = 0.5;
 const MAX_ZOOM: f64 = 2.0;
 const UPDATES_TOPIC: &str = "updates";
 const UPDATE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Passed by the launcher's "Quit Voyager" action.
+const QUIT_ARG: &str = "--quit";
+#[cfg(target_os = "linux")]
+const BACKGROUND_HINT_FILE: &str = "background_hint_shown";
 
 /// Current zoom factor, since the webview does not expose a getter.
 struct ZoomLevel(Mutex<f64>);
@@ -48,8 +52,12 @@ fn os_theme() -> &'static str {
 pub fn run() {
     tauri::Builder::default()
         // Must be registered first so a second launch exits before Elixir starts.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            open_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if argv.iter().any(|arg| arg == QUIT_ARG) {
+                app.exit(0);
+            } else {
+                open_window(app);
+            }
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -101,7 +109,22 @@ pub fn run() {
                 }
             }
 
+            // Reaching setup means no Voyager was running for the single-instance plugin to quit.
+            if std::env::args().any(|arg| arg == QUIT_ARG) {
+                std::process::exit(0);
+            }
+
             tray::setup(app);
+
+            #[cfg(target_os = "linux")]
+            {
+                let app_handle = app.handle().clone();
+                utils::on_tray_host_lost(move || {
+                    if app_handle.get_webview_window(MAIN_WINDOW_LABEL).is_none() {
+                        open_window(&app_handle);
+                    }
+                });
+            }
 
             let pubsub = elixirkit::PubSub::listen("tcp://127.0.0.1:0").expect("failed to listen");
             app.manage(pubsub.clone());
@@ -161,7 +184,14 @@ pub fn run() {
             // Closing the last window leaves Voyager running behind the tray icon.
             RunEvent::ExitRequested {
                 code: None, api, ..
-            } if utils::tray_host_available() => api.prevent_exit(),
+            } if utils::tray_host_available() => {
+                api.prevent_exit();
+                // Hides the Dock icon while only the tray is left.
+                #[cfg(target_os = "macos")]
+                let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                #[cfg(target_os = "linux")]
+                hint_still_running(app);
+            }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen {
                 has_visible_windows: false,
@@ -315,17 +345,50 @@ fn create_window(app_handle: &tauri::AppHandle, port: u16) {
         let _ = window.set_focus();
     }
 
+    #[cfg(target_os = "linux")]
+    quit_on_ctrl_q(&window, app_handle);
+}
+
+/// macOS gets Cmd+Q from its app menu; Linux windows have no menu to carry it.
+#[cfg(target_os = "linux")]
+fn quit_on_ctrl_q(window: &tauri::WebviewWindow, app_handle: &tauri::AppHandle) {
+    use gtk::prelude::*;
+
+    let window = window.clone();
     let app_handle = app_handle.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::Destroyed = event {
-            if !utils::tray_host_available() {
+    // The window may be built off the main thread, and GTK objects must be touched on it.
+    let _ = window.clone().run_on_main_thread(move || {
+        let Ok(gtk_window) = window.gtk_window() else {
+            return;
+        };
+        let accel_group = gtk::AccelGroup::new();
+        accel_group.connect_accel_group(
+            *gtk::gdk::keys::constants::q,
+            gtk::gdk::ModifierType::CONTROL_MASK,
+            gtk::AccelFlags::VISIBLE,
+            move |_, _, _, _| {
                 app_handle.exit(0);
-            }
-            // Hides the Dock icon while only the tray is left.
-            #[cfg(target_os = "macos")]
-            let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
-        }
+                true
+            },
+        );
+        gtk_window.add_accel_group(&accel_group);
     });
+}
+
+/// Tells the user once that closing the window left Voyager running.
+#[cfg(target_os = "linux")]
+fn hint_still_running(app_handle: &tauri::AppHandle) {
+    let Ok(data_dir) = app_handle.path().app_data_dir() else {
+        return;
+    };
+    let marker = data_dir.join(BACKGROUND_HINT_FILE);
+    if marker.exists() || std::fs::write(&marker, "").is_err() {
+        return;
+    }
+    utils::notify(
+        "Voyager is still running",
+        "Quit it from the tray icon, or with Ctrl+Q in the Voyager window.",
+    );
 }
 
 fn elixir_command(

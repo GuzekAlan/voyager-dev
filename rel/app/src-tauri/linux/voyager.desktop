@@ -16,6 +16,11 @@ Name={{name}}
 Terminal=false
 Type=Application
 SingleMainWindow=true
+Actions=Quit;
 {{#if mime_type}}
 MimeType={{mime_type}}
 {{/if}}
+
+[Desktop Action Quit]
+Name=Quit {{name}}
+Exec={{exec}} --quit

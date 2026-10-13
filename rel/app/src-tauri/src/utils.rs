@@ -51,24 +51,111 @@ pub fn os_theme_hint() -> &'static str {
     }
 }
 
+#[cfg(target_os = "linux")]
+const TRAY_WATCHER: &str = "org.kde.StatusNotifierWatcher";
+
 /// Whether the desktop can show a tray icon. Linux needs a StatusNotifierItem host,
 /// which stock GNOME lacks without the AppIndicator extension.
 #[cfg(target_os = "linux")]
 pub fn tray_host_available() -> bool {
-    std::process::Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            "org.freedesktop.DBus",
-            "--object-path",
-            "/org/freedesktop/DBus",
-            "--method",
-            "org.freedesktop.DBus.NameHasOwner",
-            "org.kde.StatusNotifierWatcher",
-        ])
-        .output()
-        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains("true"))
+    use gtk::glib::ToVariant;
+
+    appindicator_available()
+        && session_bus()
+            .and_then(|bus| {
+                bus.call_sync(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    "NameHasOwner",
+                    Some(&(TRAY_WATCHER,).to_variant()),
+                    None,
+                    gtk::gio::DBusCallFlags::NONE,
+                    1000,
+                    gtk::gio::Cancellable::NONE,
+                )
+                .ok()
+            })
+            .and_then(|reply| reply.get::<(bool,)>())
+            .is_some_and(|(owned,)| owned)
+}
+
+/// Calls `on_lost` on the main thread whenever the tray host leaves the session bus.
+/// Must run on the main thread.
+#[cfg(target_os = "linux")]
+pub fn on_tray_host_lost(on_lost: impl Fn() + 'static) {
+    let Some(bus) = session_bus() else {
+        return;
+    };
+    bus.signal_subscribe(
+        Some("org.freedesktop.DBus"),
+        Some("org.freedesktop.DBus"),
+        Some("NameOwnerChanged"),
+        Some("/org/freedesktop/DBus"),
+        Some(TRAY_WATCHER),
+        gtk::gio::DBusSignalFlags::NONE,
+        move |_, _, _, _, _, params| {
+            if params
+                .get::<(String, String, String)>()
+                .is_some_and(|(_, _, new_owner)| new_owner.is_empty())
+            {
+                on_lost();
+            }
+        },
+    );
+    // GIO drops the shared session bus, and the subscription with it, once nothing holds it.
+    std::mem::forget(bus);
+}
+
+/// Shows a desktop notification; fire and forget.
+#[cfg(target_os = "linux")]
+pub fn notify(summary: &str, body: &str) {
+    use gtk::glib::{ToVariant, Variant, VariantDict};
+
+    let Some(bus) = session_bus() else {
+        return;
+    };
+    let actions: Vec<String> = Vec::new();
+    let params = Variant::tuple_from_iter([
+        "Voyager".to_variant(),
+        0u32.to_variant(),
+        "".to_variant(),
+        summary.to_variant(),
+        body.to_variant(),
+        actions.to_variant(),
+        VariantDict::new(None).end(),
+        (-1i32).to_variant(),
+    ]);
+    bus.call(
+        Some("org.freedesktop.Notifications"),
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+        "Notify",
+        Some(&params),
+        None,
+        gtk::gio::DBusCallFlags::NONE,
+        -1,
+        gtk::gio::Cancellable::NONE,
+        |_| {},
+    );
+}
+
+/// Tauri's tray loads this library at runtime and panics when the distro lacks it.
+#[cfg(target_os = "linux")]
+pub fn appindicator_available() -> bool {
+    [
+        "libayatana-appindicator3.so.1",
+        "libappindicator3.so.1",
+        "libayatana-appindicator3.so",
+        "libappindicator3.so",
+    ]
+    .into_iter()
+    .any(|name| unsafe { libloading::Library::new(name) }.is_ok())
+}
+
+#[cfg(target_os = "linux")]
+fn session_bus() -> Option<gtk::gio::DBusConnection> {
+    gtk::gio::bus_get_sync(gtk::gio::BusType::Session, gtk::gio::Cancellable::NONE).ok()
 }
 
 #[cfg(not(target_os = "linux"))]

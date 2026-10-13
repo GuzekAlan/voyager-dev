@@ -9,6 +9,8 @@ dependencies = [
  "dark-light",
  "elixirkit",
  "fix-path-env",
+ "gtk",
+ "libloading",
  "rand",
  "serde",
  "serde_json",

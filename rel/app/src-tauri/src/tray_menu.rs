@@ -50,6 +50,10 @@ static TRAY: OnceLock<Tray> = OnceLock::new();
 
 /// Adds the tray icon with a native menu, the whole UI where the SwiftUI popover is unavailable.
 pub fn setup(app: &tauri::App) {
+    #[cfg(target_os = "linux")]
+    if !crate::utils::appindicator_available() {
+        return eprintln!("[rust] no appindicator library, running without a tray");
+    }
     match build(app) {
         Ok(tray) => {
             let _ = TRAY.set(tray);
