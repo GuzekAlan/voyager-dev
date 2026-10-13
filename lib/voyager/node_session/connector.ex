@@ -20,8 +20,8 @@ defmodule Voyager.NodeSession.Connector do
 
   @doc """
   Whether an incoming process message means this connector's transport has
-  already gone away. When it returns `true`, `NodeSession` drops the session
-  without calling `disconnect/2`.
+  already gone away. When it returns `true`, `NodeSession` calls `disconnect/2`
+  to release what is left of the transport and drops the session.
   """
   @callback teardown?(msg :: term(), meta()) :: boolean()
 end

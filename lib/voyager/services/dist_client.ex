@@ -21,7 +21,7 @@ defmodule Voyager.Services.DistClient do
   # Ticking every second keeps targets with a low net_ticktime from dropping us.
   @tick_interval 1_000
   @idle_timeout :timer.minutes(5)
-  @max_frame 64 * 1024 * 1024
+  @max_frame 16 * 1024 * 1024
   @max_heap_words 32 * 1024 * 1024
 
   @send 2
@@ -50,7 +50,12 @@ defmodule Voyager.Services.DistClient do
   def stop(client) do
     GenServer.stop(client, :normal, @send_timeout)
   catch
-    :exit, _ -> :ok
+    :exit, :timeout ->
+      Process.exit(client, :kill)
+      :ok
+
+    :exit, _ ->
+      :ok
   end
 
   @spec enabled?() :: boolean()
@@ -211,7 +216,7 @@ defmodule Voyager.Services.DistClient do
         state
 
       :rejected ->
-        :rejected
+        state
     end
   end
 

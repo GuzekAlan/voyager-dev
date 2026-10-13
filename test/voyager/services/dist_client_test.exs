@@ -58,6 +58,17 @@ defmodule Voyager.Services.DistClientTest do
     assert safe_call(node, :erlang, :node, []) == {:ok, node}
   end
 
+  test "results cannot carry runnable funs", %{node: node} = ctx do
+    start_supervised!({DistClient, ctx.opts})
+    gadget = :erlang.term_to_binary(Stream.map([:pwned], &send(self(), &1)))
+
+    result = Socket.call(node, :erlang, :binary_to_term, [gadget], 5_000)
+
+    assert %{"__struct__" => "Stream"} = result
+    Enum.to_list(result)
+    refute_receive :pwned, 100
+  end
+
   test "rejects a wrong cookie", ctx do
     assert DistClient.start(Keyword.put(ctx.opts, :cookie, "wrong")) == {:error, :bad_cookie}
   end

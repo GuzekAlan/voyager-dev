@@ -6,7 +6,7 @@ defmodule Voyager.Services.DistClient.Frame do
   @exit2 8
   @spawn_request 29
 
-  @atom_tags [<<100>>, <<115>>, <<118>>, <<119>>]
+  @atom_tags [100, 115, 118, 119]
 
   @spec decode(binary()) :: :tick | {:control, term(), binary()} | :rejected
   def decode(<<>>), do: :tick
@@ -14,14 +14,44 @@ defmodule Voyager.Services.DistClient.Frame do
   def decode(<<@pass_through, rest::binary>>) do
     with {:ok, {control, used}} <- to_term(rest, [:used]) do
       <<_control::binary-size(^used), payload::binary>> = rest
-      {:control, control, payload}
+      {:control, inert(control), payload}
     end
   end
 
   def decode(_other), do: :rejected
 
+  @doc "Decodes an unsolicited message payload; it may not create atoms."
   @spec decode_payload(binary()) :: {:ok, term()} | :rejected
-  def decode_payload(payload), do: to_term(payload, [])
+  def decode_payload(<<131, 80, _rest::binary>>), do: :rejected
+
+  def decode_payload(payload) do
+    {:ok, inert(:erlang.binary_to_term(payload, [:safe]))}
+  rescue
+    ArgumentError -> :rejected
+  end
+
+  @doc """
+  Replaces funs with their inspected text and turns structs of locally existing
+  modules into plain maps, so no local function or protocol implementation can
+  be reached through a term from the remote node.
+  """
+  @spec inert(term()) :: term()
+  def inert(term) when is_function(term), do: inspect(term)
+  def inert(list) when is_list(list), do: inert_list(list)
+
+  def inert(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.map(&inert/1) |> List.to_tuple()
+
+  def inert(%{__struct__: mod} = struct) when is_atom(mod) do
+    map = inert_map(struct)
+
+    if :code.which(mod) == :non_existing,
+      do: map,
+      else: map |> Map.delete(:__struct__) |> Map.put("__struct__", inspect(mod))
+  end
+
+  def inert(map) when is_map(map), do: inert_map(map)
+  def inert(term), do: term
 
   @spec spawn_request(reference(), pid(), {module(), atom(), [term()]}) :: iodata()
   def spawn_request(ref, from, {mod, fun, args}) do
@@ -57,13 +87,30 @@ defmodule Voyager.Services.DistClient.Frame do
 
   # Each new atom needs a tag byte, so counting tags caps the atoms one frame can create.
   defp to_term_with_new_atoms(binary, opts) do
-    new_atoms = length(:binary.matches(binary, @atom_tags))
     budget = div(:erlang.system_info(:atom_limit) * 9, 10) - :erlang.system_info(:atom_count)
 
-    if new_atoms < budget, do: {:ok, :erlang.binary_to_term(binary, opts)}, else: :rejected
+    if byte_size(binary) < budget or atom_tags(binary) < budget,
+      do: {:ok, :erlang.binary_to_term(binary, opts)},
+      else: :rejected
   rescue
     ArgumentError -> :rejected
   end
+
+  defp atom_tags(binary) do
+    for <<byte <- binary>>, byte in @atom_tags, reduce: 0, do: (count -> count + 1)
+  end
+
+  # :maps keeps protocol dispatch on `__struct__` out of the walk.
+  defp inert_map(map),
+    do:
+      map
+      |> :maps.to_list()
+      |> Enum.map(fn {k, v} -> {inert(k), inert(v)} end)
+      |> :maps.from_list()
+
+  defp inert_list([head | tail]), do: [inert(head) | inert_list(tail)]
+  defp inert_list([]), do: []
+  defp inert_list(tail), do: inert(tail)
 
   defp encode(control), do: [@pass_through, :erlang.term_to_binary(control)]
   defp encode(control, message), do: [encode(control), :erlang.term_to_binary(message)]

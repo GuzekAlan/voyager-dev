@@ -171,6 +171,7 @@ defmodule Voyager.NodeSession do
 
   def handle_info(msg, %{session: %Session{connector: connector, meta: meta} = session} = state) do
     if connector.teardown?(msg, meta) do
+      connector.disconnect(session.node, meta)
       new_state = drop_session(state, session, :nodedown, "transport down", :transport_down)
       {:noreply, new_state}
     else

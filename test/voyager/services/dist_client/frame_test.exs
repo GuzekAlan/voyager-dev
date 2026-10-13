@@ -21,7 +21,32 @@ defmodule Voyager.Services.DistClient.FrameTest do
   test "rejects a frame that could create more atoms than the table has room for" do
     budget = :erlang.system_info(:atom_limit) - :erlang.system_info(:atom_count)
 
-    assert Frame.decode_payload(<<131, :binary.copy(<<119>>, budget)::binary>>) == :rejected
+    frame = <<112, 131, :binary.copy(<<119>>, budget)::binary>>
+
+    assert Frame.decode(frame) == :rejected
+  end
+
+  test "turns funs and local structs into data that runs nothing" do
+    probe = Stream.map([:pwned], &send(self(), &1))
+    inert = Frame.inert({:ok, [probe, %File.Stream{path: "/etc/hosts"}]})
+
+    assert {:ok, [%{"__struct__" => "Stream", funs: [fun]}, %{"__struct__" => "File.Stream"}]} =
+             inert
+
+    assert is_binary(fun)
+    refute is_struct(elem(inert, 1) |> hd())
+  end
+
+  test "keeps structs of modules that only exist on the remote node" do
+    remote = %{__struct__: :"Elixir.Remote.Only.State", count: 1}
+
+    assert Frame.inert(remote) == remote
+  end
+
+  test "rejects unsolicited payloads that would create atoms" do
+    payload = <<131, 119, 20, "voyager_unknown_atom">>
+
+    assert Frame.decode_payload(payload) == :rejected
   end
 
   test "rejects frames that are not pass-through" do

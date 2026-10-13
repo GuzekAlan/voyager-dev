@@ -229,7 +229,7 @@ defmodule Voyager.NodeSessionTest do
   end
 
   describe "transport teardown" do
-    test "drops the session without calling disconnect/2 when the connector signals teardown" do
+    test "drops the session and releases the transport when the connector signals teardown" do
       ref = make_ref()
 
       :ok =
@@ -242,7 +242,7 @@ defmodule Voyager.NodeSessionTest do
       send(NodeSession, {:fake_transport_down, ref})
 
       assert_receive {:nodedown, ^node, :transport_down}
-      refute_received {:connector_disconnect, _}
+      assert_received {:connector_disconnect, _}
       refute NodeSession.connected?()
     end
 
