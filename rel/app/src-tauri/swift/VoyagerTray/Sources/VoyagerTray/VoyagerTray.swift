@@ -1,7 +1,6 @@
 // Menu bar icon and SwiftUI status popover, driven from Rust through the C functions at the bottom.
 import AppKit
 import SwiftUI
-import os
 
 public typealias ActionCallback = @convention(c) (UnsafePointer<CChar>) -> Void
 
@@ -41,7 +40,6 @@ enum TrayAction: String {
     case dismissError = "dismiss_error"
 }
 
-@MainActor
 final class TrayModel: ObservableObject {
     @Published var status: TrayStatus?
     let version: String
@@ -53,7 +51,6 @@ final class TrayModel: ObservableObject {
     }
 }
 
-@MainActor
 final class TrayController: NSObject, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover: NSPopover
@@ -321,7 +318,6 @@ struct VoyagerSwitchStyle: ToggleStyle {
 
 struct CopyButton: View {
     let text: String
-    @State private var copies = 0
     @State private var copied = false
 
     var body: some View {
@@ -329,7 +325,7 @@ struct CopyButton: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             copied = true
-            copies += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
         } label: {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 11, weight: .medium))
@@ -341,14 +337,6 @@ struct CopyButton: View {
         .pointingHandCursor()
         .help(copied ? "Copied" : "Copy address")
         .accessibilityLabel("Copy address")
-        .task(id: copies) {
-            guard copied else { return }
-            do {
-                try await Task.sleep(for: .seconds(1.5))
-                copied = false
-            } catch {}
-        }
-        .onDisappear { copied = false }
     }
 }
 
@@ -450,8 +438,7 @@ struct VoyagerButtonStyle: ButtonStyle {
     }
 }
 
-@MainActor private var controller: TrayController?
-private let log = Logger(subsystem: "com.swmansion.voyager", category: "tray")
+private var controller: TrayController?
 private let decoder: JSONDecoder = {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -469,20 +456,12 @@ public func voyagerTraySetup(
     guard let icon = NSImage(data: Data(bytes: iconBytes, count: iconLength)) else {
         preconditionFailure("tray.png is not a valid image")
     }
-    let version = String(cString: version)
-    MainActor.assumeIsolated {
-        controller = TrayController(icon: icon, version: version, onAction: onAction)
-    }
+    controller = TrayController(icon: icon, version: String(cString: version), onAction: onAction)
 }
 
 @_cdecl("voyager_tray_update")
 public func voyagerTrayUpdate(_ json: UnsafePointer<CChar>) {
     let data = Data(String(cString: json).utf8)
-    MainActor.assumeIsolated {
-        do {
-            controller?.model.status = try decoder.decode(TrayStatus.self, from: data)
-        } catch {
-            log.error("Dropped tray status: \(error, privacy: .public)")
-        }
-    }
+    guard let status = try? decoder.decode(TrayStatus.self, from: data) else { return }
+    controller?.model.status = status
 }
