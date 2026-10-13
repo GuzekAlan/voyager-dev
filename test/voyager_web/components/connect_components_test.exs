@@ -29,12 +29,9 @@ defmodule VoyagerWeb.ConnectComponentsTest do
       assert count(html, "input#ssh_key_path") == 1
     end
 
-    test "starts browsing in the expanded start_dir" do
+    test "starts browsing in the user's ~/.ssh" do
       assert attr(path_field(), "#ssh_key_path-browse", "data-default-path") ==
                [Path.expand("~/.ssh")]
-
-      assert attr(path_field(start_dir: "/etc/ssh"), "#ssh_key_path-browse", "data-default-path") ==
-               ["/etc/ssh"]
     end
 
     test "limits the tooltip to runs outside the desktop app" do

@@ -182,7 +182,6 @@ defmodule VoyagerWeb.ConnectComponents do
   attr :field, Phoenix.HTML.FormField, required: true
   attr :label, :string, required: true
   attr :placeholder, :string, default: nil
-  attr :start_dir, :string, default: "~/.ssh"
   attr :disabled, :boolean, default: false
 
   def path_field(assigns) do
@@ -195,7 +194,7 @@ defmodule VoyagerWeb.ConnectComponents do
             id={"#{@field.id}-browse"}
             phx-hook=".PathField"
             data-input-id={@field.id}
-            data-default-path={Path.expand(@start_dir)}
+            data-default-path={Path.expand("~/.ssh")}
             data-locked={@disabled}
             disabled
             class="btn btn-soft btn-xs font-mono gap-1.5 text-xs"
@@ -213,15 +212,11 @@ defmodule VoyagerWeb.ConnectComponents do
           this.invoke = window.__TAURI_INTERNALS__?.invoke
           this.sync()
           this.el.addEventListener("click", async () => {
-            const input = document.getElementById(this.el.dataset.inputId)
-            const defaultPath = input.value.startsWith("/")
-              ? input.value
-              : this.el.dataset.defaultPath
-            const path = await this.invoke("plugin:dialog|open", {
-              options: {multiple: false, directory: false, defaultPath}
-            })
+            const {inputId, defaultPath} = this.el.dataset
+            const path = await this.invoke("plugin:dialog|open", {options: {defaultPath}})
             if (typeof path !== "string") return
 
+            const input = document.getElementById(inputId)
             input.value = path
             input.dispatchEvent(new Event("input", {bubbles: true}))
           })
