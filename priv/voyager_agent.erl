@@ -640,6 +640,8 @@ bound_records([Record | Rest], Budget, Truncated, Acc) ->
 
 -define(TRACE_FLUSH_MS, 100).
 -define(TRACE_BATCH, 200).
+%% Budget units held unsent: 200 full-budget events would blow the tracer's `max_heap_size'.
+-define(TRACE_BATCH_BUDGET, 400_000).
 %% Counts messages, not bytes: a large-args flood on `all' can still peak at GBs.
 -define(TRACE_MAX_MAILBOX, 5_000).
 %% Below Voyager's 5 s erpc timeout, so the worker gives up (and kills the tracer) first.
@@ -727,6 +729,7 @@ stop_tracer(Tracer) ->
         {'DOWN', MRef, process, Tracer, _Reason} ->
             ok
     after ?TRACE_TIMEOUT ->
+        exit(Tracer, kill),
         erlang:demonitor(MRef, [flush]),
         {error, timeout}
     end.
@@ -1069,7 +1072,7 @@ tracer_event(#tracer{limits = Limits} = T0, Pid, Ts, {MFA, Event}) ->
             tracer_stop(T, event_limit);
         is_integer(MaxRate), Rate > MaxRate ->
             tracer_stop(T, rate_limit);
-        T#tracer.buffered >= ?TRACE_BATCH ->
+        T#tracer.buffered >= min(?TRACE_BATCH, ?TRACE_BATCH_BUDGET div max(T#tracer.budget, 1)) ->
             tracer_loop(send_batch(T));
         true ->
             tracer_loop(T)

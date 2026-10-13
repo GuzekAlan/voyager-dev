@@ -342,6 +342,29 @@ defmodule VoyagerAgentTraceTest do
     assert {_events, :mailbox_limit, _stats} = collect(tracer)
   end
 
+  test "survives a full-budget flood of large arguments" do
+    big = Enum.to_list(1..100_000)
+
+    {:ok, tracer} =
+      start(spec(module: "Elixir.Enum", function: "sum", arity: 1), %{
+        max_events: 60,
+        budget: 100_000
+      })
+
+    for _ <- 1..60, do: Enum.sum(big)
+
+    assert {_events, :event_limit, %{events: 60}} = collect(tracer)
+  end
+
+  test "trace_stop kills a tracer that does not stop in time" do
+    {:ok, tracer} = start(spec(), @limits)
+    ref = Process.monitor(tracer)
+    :erlang.suspend_process(tracer)
+
+    assert {:error, :timeout} = @agent_module.trace_stop(tracer)
+    assert_receive {:DOWN, ^ref, :process, ^tracer, :killed}
+  end
+
   defp spec(overrides \\ []) do
     Enum.into(overrides, %{
       module: "Elixir.String",
