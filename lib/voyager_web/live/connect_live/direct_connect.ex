@@ -22,7 +22,8 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
   def update(assigns, socket) when not is_map_key(socket.assigns, :initialized) do
     socket
     |> assign(:id, assigns.id)
-    |> assign(:connected?, assigns.connected?)
+    |> assign(:disabled?, assigns.disabled?)
+    |> assign(:connecting?, assigns.connecting?)
     |> assign(:form, empty_form())
     |> SecretVisibility.init()
     |> RecentConnections.init(
@@ -36,7 +37,8 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
   def update(assigns, socket) do
     socket
     |> assign(:id, assigns.id)
-    |> assign(:connected?, assigns.connected?)
+    |> assign(:disabled?, assigns.disabled?)
+    |> assign(:connecting?, assigns.connecting?)
     |> ok()
   end
 
@@ -57,7 +59,7 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
         phx-target={@myself}
         phx-change="validate"
         phx-submit="connect"
-        class={["flex flex-col gap-4", @connected? && "pointer-events-none"]}
+        class={["flex flex-col gap-4", @disabled? && "pointer-events-none"]}
       >
         <ConnectComponents.form_field
           field={@form[:node_name]}
@@ -67,13 +69,13 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
               do: "my_app@server.company.com",
               else: "my_app@my-machine"
           }
-          disabled={@connected?}
+          disabled={@disabled?}
         >
           <:trailing>
             <ConnectComponents.name_type_toggle
               name="conn[name_type]"
               value={@current_name_type}
-              disabled={@connected?}
+              disabled={@disabled?}
             />
           </:trailing>
         </ConnectComponents.form_field>
@@ -87,7 +89,7 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
           remember_name="conn[remember_cookie]"
           remember_checked={to_string(@form[:remember_cookie].value) == "true"}
           remember_label="Remember cookie"
-          disabled={@connected?}
+          disabled={@disabled?}
         />
 
         <ConnectComponents.connect_submit
@@ -95,7 +97,8 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
           icon="icon-network"
           label="Connect"
           loading_label="Connecting…"
-          disabled={@connected?}
+          loading={@connecting?}
+          disabled={@disabled?}
         />
       </.form>
 
@@ -103,10 +106,10 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
         id_prefix={@id_prefix}
         pinned_connections={@pinned_connections}
         recent_connections={@recent_connections}
-        disabled={@connected?}
+        disabled={@disabled?}
       >
         <:row :let={{conn, pinned}}>
-          <.direct_connection_row conn={conn} pinned={pinned} target={@myself} disabled={@connected?} />
+          <.direct_connection_row conn={conn} pinned={pinned} target={@myself} disabled={@disabled?} />
         </:row>
       </RecentConnections.render>
 
@@ -162,7 +165,7 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
     {:noreply, assign(socket, :form, to_form(changeset, as: :conn))}
   end
 
-  def handle_event("fill_recent", _params, %{assigns: %{connected?: true}} = socket) do
+  def handle_event("fill_recent", _params, %{assigns: %{disabled?: true}} = socket) do
     {:noreply, socket}
   end
 
@@ -193,37 +196,57 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
   end
 
   def handle_event("connect", %{"conn" => params}, socket) do
-    case ConnectionParams.changeset(params) |> Ecto.Changeset.apply_action(:insert) do
-      {:ok, %ConnectionParams{} = p} -> do_connect(socket, params, p)
-      {:error, changeset} -> {:noreply, assign(socket, :form, to_form(changeset, as: :conn))}
+    changeset = ConnectionParams.changeset(params)
+
+    case Ecto.Changeset.apply_action(changeset, :insert) do
+      {:ok, %ConnectionParams{} = p} ->
+        socket
+        |> assign(:form, to_form(changeset, as: :conn))
+        |> start_connect(p)
+        |> noreply()
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :form, to_form(changeset, as: :conn))}
     end
   end
 
-  defp do_connect(socket, params, %ConnectionParams{
-         node_name: node_name,
-         cookie: cookie,
-         name_type: name_type,
-         remember_cookie: remember_cookie
-       }) do
-    case NodeSession.connect(node_name, cookie, name_type: name_type) do
-      :ok ->
-        cookie_to_store = if remember_cookie, do: cookie, else: nil
+  @impl true
+  def handle_async(:connect, {:ok, {:error, reason}}, socket) do
+    {:noreply, put_connect_error(socket, reason)}
+  end
 
-        ConnectionActions.upsert_connected(node_name,
-          cookie: cookie_to_store,
-          name_type: name_type
-        )
+  def handle_async(:connect, {:exit, _reason}, socket) do
+    {:noreply, put_connect_error(socket, :unexpected_exit)}
+  end
 
-        {:noreply, redirect(socket, to: ~p"/node/#{node_name}")}
+  def handle_async(:connect, {:ok, :ok}, socket) do
+    {:noreply, redirect(socket, to: ~p"/open")}
+  end
 
-      {:error, reason} ->
-        changeset =
-          ConnectionParams.changeset(params)
-          |> Ecto.Changeset.add_error(error_field(reason), connect_error(reason))
-          |> Map.put(:action, :insert)
+  defp start_connect(socket, %ConnectionParams{} = p) do
+    start_async(socket, :connect, fn -> connect(p) end)
+  end
 
-        {:noreply, assign(socket, :form, to_form(changeset, as: :conn))}
+  defp connect(%ConnectionParams{} = p) do
+    with :ok <- NodeSession.connect(p.node_name, p.cookie, name_type: p.name_type) do
+      ConnectionActions.upsert_connected(p.node_name,
+        cookie: if(p.remember_cookie, do: p.cookie),
+        name_type: p.name_type
+      )
+
+      :ok
     end
+  end
+
+  defp put_connect_error(socket, reason) do
+    form =
+      socket.assigns.form.params
+      |> ConnectionParams.changeset()
+      |> Ecto.Changeset.add_error(error_field(reason), connect_error(reason))
+      |> Map.put(:action, :insert)
+      |> to_form(as: :conn)
+
+    assign(socket, :form, form)
   end
 
   defp empty_form do

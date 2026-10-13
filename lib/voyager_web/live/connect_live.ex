@@ -104,14 +104,16 @@ defmodule VoyagerWeb.ConnectLive do
               <.live_component
                 module={VoyagerWeb.ConnectLive.DirectConnect}
                 id="direct-connect"
-                connected?={not is_nil(@connected_session)}
+                disabled?={not is_nil(@connected_session) or @connecting?}
+                connecting?={@connecting?}
               />
             </div>
             <div class={(@mode != :ssh or !@proxy_epmd_active?) && "hidden"}>
               <.live_component
                 module={VoyagerWeb.ConnectLive.SshConnect}
                 id="ssh-connect"
-                connected?={not is_nil(@connected_session)}
+                disabled?={not is_nil(@connected_session) or @connecting?}
+                connecting?={@connecting?}
               />
             </div>
           </div>
@@ -135,11 +137,21 @@ defmodule VoyagerWeb.ConnectLive do
   end
 
   @impl true
+  def handle_info({:node_connecting, _node_name}, socket) do
+    {:noreply, assign(socket, :connecting?, true)}
+  end
+
+  # The form that started the connect shows the error from its own connect result.
+  def handle_info({:node_connect_failed, _node_name, _reason}, socket) do
+    {:noreply, assign(socket, :connecting?, false)}
+  end
+
   def handle_info({:node_connected, _node}, socket) do
     session = NodeSession.current()
 
     socket
     |> assign(:connected_session, session)
+    |> assign(:connecting?, false)
     |> maybe_patch_connected_session(session)
     |> noreply()
   end
@@ -147,10 +159,6 @@ defmodule VoyagerWeb.ConnectLive do
   def handle_info({event, _node, _reason}, socket)
       when event in [:node_disconnected, :nodedown] do
     {:noreply, assign(socket, :connected_session, nil)}
-  end
-
-  def handle_info({:ssh_connecting, connecting?}, socket) do
-    {:noreply, assign(socket, :connecting?, connecting?)}
   end
 
   def handle_info(_, socket), do: {:noreply, socket}

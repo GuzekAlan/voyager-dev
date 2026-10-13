@@ -41,6 +41,7 @@ defmodule Voyager.Services.TrayStatus do
         mcp: mcp_info(MCP.info()),
         last_connection: last_connectable(),
         connecting: false,
+        connect_task: nil,
         error: nil
       }
 
@@ -53,8 +54,8 @@ defmodule Voyager.Services.TrayStatus do
   @impl GenServer
   def handle_info("connect", %{connecting: false, connection: nil, last_connection: last} = state)
       when last != nil do
-    Task.Supervisor.async_nolink(Voyager.TaskSupervisor, fn -> connect(last) end)
-    {:noreply, push(%{state | connecting: true, error: nil})}
+    task = Task.Supervisor.async_nolink(Voyager.TaskSupervisor, fn -> connect(last) end)
+    {:noreply, push(%{state | connecting: true, connect_task: task.ref, error: nil})}
   end
 
   def handle_info("disconnect", state) do
@@ -81,20 +82,27 @@ defmodule Voyager.Services.TrayStatus do
   end
 
   # Reply from the async_nolink connect task; :flush drops its trailing :DOWN.
-  def handle_info({ref, result}, state) when is_reference(ref) do
+  def handle_info({ref, _result}, %{connect_task: ref} = state) do
     Process.demonitor(ref, [:flush])
-    error = if result not in [:ok, {:error, :already_connected}], do: @connect_error
-    {:noreply, push(%{state | connecting: false, error: error})}
+    {:noreply, %{state | connect_task: nil}}
   end
 
   # The connect task crashed, otherwise "Connecting…" would never clear.
-  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{connect_task: ref} = state) do
+    {:noreply, push(%{state | connecting: false, connect_task: nil, error: @connect_error})}
+  end
+
+  def handle_info({:node_connecting, _node_name}, %{connecting: false} = state) do
+    {:noreply, push(%{state | connecting: true, error: nil})}
+  end
+
+  def handle_info({:node_connect_failed, _node_name, _reason}, state) do
     {:noreply, push(%{state | connecting: false, error: @connect_error})}
   end
 
   def handle_info({:node_connected, _node}, state) do
-    connection = connection_info(NodeSession.current())
-    {:noreply, push(%{state | connection: connection, last_connection: last_connectable()})}
+    state = %{state | connection: connection_info(NodeSession.current()), connecting: false}
+    {:noreply, push(%{state | last_connection: last_connectable()})}
   end
 
   def handle_info({event, _node, _reason}, state) when event in [:node_disconnected, :nodedown] do
@@ -172,7 +180,11 @@ defmodule Voyager.Services.TrayStatus do
   defp mcp_error(reason), do: "Could not toggle the MCP server: #{inspect(reason)}"
 
   defp push(state) do
-    payload = %{state | last_connection: last_connection_info(state.last_connection)}
+    payload =
+      state
+      |> Map.delete(:connect_task)
+      |> Map.update!(:last_connection, &last_connection_info/1)
+
     ElixirKit.PubSub.broadcast(@native_topic, JSON.encode!(payload))
     state
   end

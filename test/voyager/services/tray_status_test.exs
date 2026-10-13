@@ -51,6 +51,33 @@ defmodule Voyager.Services.TrayStatusTest do
     assert is_binary(error)
   end
 
+  test "ignores connect while the app is connecting" do
+    insert!(%Connection{node_name: "saved@127.0.0.1", cookie: "secret"}, 0)
+    broadcast(NodeSession.topic(), {:nodedown, @node, :connection_closed})
+    assert %{"last_connection" => %{"node" => "saved@127.0.0.1"}} = receive_status()
+
+    broadcast(NodeSession.topic(), {:node_connecting, "saved@127.0.0.1"})
+    assert %{"connecting" => true} = receive_status()
+
+    send(TrayStatus, "connect")
+    refute_receive {:"$gen_cast", {:broadcast, "tray", _json}}
+
+    broadcast(NodeSession.topic(), {:node_connect_failed, "saved@127.0.0.1", :bad_cookie})
+    assert %{"connecting" => false, "error" => error} = receive_status()
+    assert is_binary(error)
+  end
+
+  test "shows the connection in the same update that ends connecting" do
+    broadcast(NodeSession.topic(), {:node_connecting, "shop@10.0.4.12"})
+    assert %{"connecting" => true} = receive_status()
+
+    connect_node()
+    broadcast(NodeSession.topic(), {:node_connected, @node})
+
+    assert %{"connecting" => false, "connection" => %{"node" => "shop@10.0.4.12"}} =
+             receive_status()
+  end
+
   test "ignores connect without a last connection" do
     send(TrayStatus, "connect")
     refute_receive {:"$gen_cast", {:broadcast, "tray", _json}}
