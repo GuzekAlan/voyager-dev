@@ -142,6 +142,7 @@ struct TrayView: View {
             HStack(spacing: 8) {
                 Button("Open Voyager") { model.perform(.open) }
                     .buttonStyle(VoyagerButtonStyle(kind: .filled))
+                    .disabled(model.status?.connecting == true)
                 Button("Quit") { model.perform(.quit) }
                     .buttonStyle(VoyagerButtonStyle(kind: .danger))
                     .frame(width: 84)
@@ -405,10 +406,11 @@ struct VoyagerButtonStyle: ButtonStyle {
         let kind: Kind
         let compact: Bool
         @State private var hovering = false
+        @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
             let shape = RoundedRectangle(cornerRadius: compact ? 6 : 8, style: .continuous)
-            let active = hovering || configuration.isPressed
+            let active = isEnabled && (hovering || configuration.isPressed)
 
             configuration.label
                 .font(.system(size: compact ? 10 : 12, weight: .medium))
@@ -417,6 +419,7 @@ struct VoyagerButtonStyle: ButtonStyle {
                 .padding(.horizontal, compact ? 6 : 10)
                 .padding(.vertical, compact ? 3 : 6)
                 .background(shape.fill(background(active: active)))
+                .opacity(isEnabled ? 1 : 0.5)
                 .contentShape(Rectangle())
                 .onHover { hovering = $0 }
                 .onDisappear { hovering = false }
