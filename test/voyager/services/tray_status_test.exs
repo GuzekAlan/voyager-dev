@@ -41,6 +41,9 @@ defmodule Voyager.Services.TrayStatusTest do
   end
 
   test "reconnects the last connection and reports the error when it fails" do
+    started_here? = not Node.alive?()
+    on_exit(fn -> if started_here? and Node.alive?(), do: :net_kernel.stop() end)
+
     insert!(%Connection{node_name: "gone@127.0.0.1", cookie: "secret"}, 0)
     broadcast(NodeSession.topic(), {:nodedown, @node, :connection_closed})
     assert %{"last_connection" => %{"node" => "gone@127.0.0.1"}} = receive_status()
