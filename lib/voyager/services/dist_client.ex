@@ -19,15 +19,16 @@ defmodule Voyager.Services.DistClient do
   @registry Voyager.Services.DistClient.Registry
   @supervisor Voyager.Services.DistClient.Supervisor
   @connect_timeout 5_000
-  @tick_interval 15_000
-  @net_ticktime 60_000
+  @send_timeout 5_000
+  # Ticking every second keeps targets with a low net_ticktime from dropping us.
+  @tick_interval 1_000
+  @idle_timeout :timer.minutes(5)
   @max_frame 64 * 1024 * 1024
   @max_heap_words 32 * 1024 * 1024
 
   @send 2
   @monitor_p_exit 21
   @send_sender 22
-  @payload_monitor_p_exit 28
   @spawn_reply 31
   @alias_send 33
 
@@ -49,7 +50,7 @@ defmodule Voyager.Services.DistClient do
 
   @spec stop(pid()) :: :ok
   def stop(client) do
-    GenServer.stop(client)
+    GenServer.stop(client, :normal, @send_timeout)
   catch
     :exit, _ -> :ok
   end
@@ -73,14 +74,20 @@ defmodule Voyager.Services.DistClient do
 
   @spec call(pid(), module(), atom(), [term()], timeout()) :: outcome()
   def call(client, mod, fun, args, timeout) do
-    GenServer.call(client, {:call, mod, fun, args, timeout}, :infinity)
+    GenServer.call(client, {:call, mod, fun, args, timeout}, call_timeout(timeout))
   catch
+    :exit, {:timeout, _} -> :timeout
     :exit, _ -> {:down, :noconnection}
   end
 
   @impl GenServer
   def init(opts) do
-    Process.flag(:max_heap_size, %{size: @max_heap_words, kill: true, error_logger: false})
+    Process.flag(:max_heap_size, %{
+      size: @max_heap_words,
+      kill: true,
+      error_logger: false,
+      include_shared_binaries: true
+    })
 
     node = Keyword.fetch!(opts, :node)
     me = local_name(Keyword.get(opts, :name_type, :longnames))
@@ -130,7 +137,11 @@ defmodule Voyager.Services.DistClient do
   @impl GenServer
   def handle_info({:tcp, socket, data}, %{socket: socket} = state) do
     :ok = :inet.setopts(socket, active: :once)
-    {:noreply, handle_frame(Frame.decode(data), %{state | last_recv: now()})}
+
+    case handle_frame(Frame.decode(data), %{state | last_recv: now()}) do
+      :rejected -> {:stop, {:shutdown, :rejected_frame}, state}
+      state -> {:noreply, state}
+    end
   end
 
   def handle_info({:tcp_closed, socket}, %{socket: socket} = state),
@@ -141,7 +152,7 @@ defmodule Voyager.Services.DistClient do
 
   def handle_info(:tick, state) do
     cond do
-      now() - state.last_recv > @net_ticktime ->
+      now() - state.last_recv > @idle_timeout ->
         {:stop, {:shutdown, :tick_timeout}, state}
 
       send_frame(state, <<>>) == :ok ->
@@ -169,6 +180,7 @@ defmodule Voyager.Services.DistClient do
   end
 
   defp handle_frame(:tick, state), do: state
+  defp handle_frame(:rejected, _state), do: :rejected
 
   defp handle_frame({:control, {@spawn_reply, ref, _to, _flags, remote_pid}, _payload}, state)
        when is_pid(remote_pid) do
@@ -187,26 +199,22 @@ defmodule Voyager.Services.DistClient do
   defp handle_frame({:control, {@monitor_p_exit, _from, _to, ref, reason}, _payload}, state),
     do: finish(state, ref, {:down, reason})
 
-  defp handle_frame({:control, {@payload_monitor_p_exit, _from, _to, ref}, payload}, state),
-    do: finish(state, ref, {:down, :erlang.binary_to_term(payload)})
-
   defp handle_frame({:control, {op, _from, _to}, payload}, state)
        when op in [@send, @send_sender, @alias_send] do
-    case :erlang.binary_to_term(payload) do
-      {:io_request, from, reply_as, request} when is_pid(from) ->
+    case Frame.decode_payload(payload) do
+      {:ok, {:io_request, from, reply_as, request}} when is_pid(from) ->
         send_frame(state, Frame.send(from, {:io_reply, reply_as, io_result(request)}))
+        state
 
-      _message ->
+      {:ok, _message} ->
         drop(state, op)
+
+      :rejected ->
+        :rejected
     end
-
-    state
   end
 
-  defp handle_frame(frame, state) do
-    drop(state, opcode(frame))
-    state
-  end
+  defp handle_frame(frame, state), do: drop(state, opcode(frame))
 
   defp finish(state, ref, outcome) do
     case Map.pop(state.pending, ref) do
@@ -228,7 +236,8 @@ defmodule Voyager.Services.DistClient do
   defp io_result(_request), do: {:error, :enotsup}
 
   defp drop(state, op) do
-    Logger.warning("Dropped distribution message #{inspect(op)} from #{state.node}")
+    Logger.debug("Dropped distribution message #{inspect(op)} from #{state.node}")
+    state
   end
 
   defp opcode({:control, control, _payload}) when is_tuple(control) and tuple_size(control) > 0,
@@ -240,7 +249,10 @@ defmodule Voyager.Services.DistClient do
 
   defp connect(address, port) do
     family = if is_tuple(address) and tuple_size(address) == 8, do: [:inet6], else: []
-    opts = [:binary, packet: 2, active: false, nodelay: true] ++ family
+
+    opts =
+      [:binary, packet: 2, active: false, nodelay: true] ++
+        [send_timeout: @send_timeout, send_timeout_close: true] ++ family
 
     case :gen_tcp.connect(address, port, opts, @connect_timeout) do
       {:ok, socket} -> {:ok, socket}
@@ -267,6 +279,9 @@ defmodule Voyager.Services.DistClient do
     host = if name_type == :shortnames, do: "localhost", else: "127.0.0.1"
     "voyager_#{suffix}@#{host}"
   end
+
+  defp call_timeout(:infinity), do: :infinity
+  defp call_timeout(timeout), do: timeout + @send_timeout
 
   defp start_timer(_ref, :infinity), do: nil
   defp start_timer(ref, timeout), do: Process.send_after(self(), {:call_timeout, ref}, timeout)

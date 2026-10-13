@@ -99,10 +99,9 @@ defmodule Voyager.Services.DistClientTest do
   end
 
   test "the node cannot run code in this VM", %{peer: peer, node: node} = ctx do
-    tmp = Path.join(System.tmp_dir!(), "dist_client_#{System.unique_integer([:positive])}")
-    File.mkdir_p!(tmp)
-    on_exit(fn -> File.rm_rf!(tmp) end)
-    touch = fn name -> [String.to_charlist("touch " <> Path.join(tmp, name))] end
+    Process.register(self(), :dist_client_test_probe)
+    probe = [:dist_client_test_probe, :pwned]
+    file = Path.join(System.tmp_dir!(), "dist_client_#{System.unique_integer([:positive])}")
 
     start_supervised!({DistClient, ctx.opts})
     me = DistClient.local_node(node)
@@ -110,38 +109,36 @@ defmodule Voyager.Services.DistClientTest do
     remote_pid = :peer.call(peer, :erlang, :whereis, [:init])
 
     assert {:error, {:erpc, :notsup}} =
-             peer_call(peer, :erpc, :call, [me, :os, :cmd, touch.("erpc"), 1_000])
+             peer_call(peer, :erpc, :call, [me, :erlang, :send, probe, 1_000])
 
-    assert {:badrpc, :notsup} =
-             peer_call(peer, :rpc, :call, [me, :os, :cmd, touch.("rpc"), 1_000])
+    assert {:badrpc, :notsup} = peer_call(peer, :rpc, :call, [me, :erlang, :send, probe, 1_000])
 
-    peer_send(peer, {:rex, me}, {remote_pid, {:call, :os, :cmd, touch.("rex"), :user}})
+    peer_send(peer, {:rex, me}, {remote_pid, {:call, :erlang, :send, probe, :user}})
 
     peer_send(
       peer,
       {:net_kernel, me},
-      {:"$gen_call", {remote_pid, make_ref()},
-       {:spawn, :os, :cmd, touch.("net_kernel"), group_leader}}
+      {:"$gen_call", {remote_pid, make_ref()}, {:spawn, :erlang, :send, probe, group_leader}}
     )
 
     peer_send(
       peer,
       {:file_server_2, me},
-      {:"$gen_call", {remote_pid, make_ref()}, {:open, Path.join(tmp, "file_server"), [:write]}}
+      {:"$gen_call", {remote_pid, make_ref()}, {:open, file, [:write]}}
     )
 
     peer_send(
       peer,
       group_leader,
-      {:io_request, remote_pid, make_ref(),
-       {:put_chars, :unicode, :os, :cmd, touch.("group_leader")}}
+      {:io_request, remote_pid, make_ref(), {:put_chars, :unicode, :erlang, :send, probe}}
     )
 
     :peer.call(peer, :erlang, :exit, [group_leader, :kill])
     :peer.call(peer, :erlang, :link, [group_leader])
 
     assert Socket.call(node, :erlang, :node, [], 5_000) == node
-    assert File.ls!(tmp) == []
+    refute_receive :pwned, 500
+    refute File.exists?(file)
     refute Node.alive?()
   end
 

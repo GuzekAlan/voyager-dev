@@ -102,8 +102,9 @@ defmodule Voyager.Pid do
   defp parse_connected(pid_str) do
     with {name, creation} <- :persistent_term.get(@connected_key, nil),
          [_, id, number, serial] <- Regex.run(~r/^<(\d+)\.(\d+)\.(\d+)>$/, pid_str),
-         true <- id == cached_node_id() do
-      Frame.pid(name, creation, String.to_integer(number), String.to_integer(serial))
+         [number, serial] = Enum.map([number, serial], &String.to_integer/1),
+         true <- id == cached_node_id() and number < 0x100000000 and serial < 0x100000000 do
+      Frame.pid(name, creation, number, serial)
     else
       _ -> nil
     end
