@@ -212,10 +212,7 @@ defmodule Voyager.Services.DistClient do
         send_frame(state, Frame.send(from, {:io_reply, reply_as, io_result(request)}))
         state
 
-      {:ok, _message} ->
-        state
-
-      :rejected ->
+      _other ->
         state
     end
   end
@@ -247,8 +244,8 @@ defmodule Voyager.Services.DistClient do
     family = if is_tuple(address) and tuple_size(address) == 8, do: [:inet6], else: []
 
     opts =
-      [:binary, packet: 2, active: false, nodelay: true] ++
-        [send_timeout: @send_timeout, send_timeout_close: true] ++ family
+      [:binary, packet: 2, active: false, nodelay: true, send_timeout: @send_timeout] ++
+        [send_timeout_close: true] ++ family
 
     case :gen_tcp.connect(address, port, opts, @connect_timeout) do
       {:ok, socket} -> {:ok, socket}

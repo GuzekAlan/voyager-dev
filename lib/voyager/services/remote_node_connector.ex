@@ -150,18 +150,8 @@ defmodule Voyager.Services.RemoteNodeConnector do
   end
 
   defp start_client(remote_node, cookie, name_type, local_port) do
-    opts = [
-      node: remote_node,
-      address: {127, 0, 0, 1},
-      port: local_port,
-      cookie: cookie,
-      name_type: name_type
-    ]
-
-    case DistClient.start(opts) do
-      {:ok, _client} -> :ok
-      {:error, _} = error -> error
-    end
+    opts = [node: remote_node, address: {127, 0, 0, 1}, port: local_port, cookie: cookie]
+    with {:ok, _client} <- DistClient.start([name_type: name_type] ++ opts), do: :ok
   end
 
   defp connect_distribution(remote_node, cookie) do

@@ -60,9 +60,7 @@ defmodule Voyager.NodeSession.Connectors.Ssh do
   def teardown?(_msg, _meta), do: false
 
   defp monitor_client(node) do
-    case DistClient.whereis(node) do
-      nil -> nil
-      client -> Process.monitor(client)
-    end
+    client = DistClient.whereis(node)
+    client && Process.monitor(client)
   end
 end
