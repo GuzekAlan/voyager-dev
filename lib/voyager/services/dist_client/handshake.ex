@@ -8,29 +8,24 @@ defmodule Voyager.Services.DistClient.Handshake do
   @mandatory_26 0x2000000 ||| 0x04 <<< 32
   # erts only sends MONITOR_P_EXIT to peers advertising both DIST_MONITOR and DIST_MONITOR_NAME.
   @dist_monitor 0x08 ||| 0x20
-  # Without DFLAG_SPAWN the remote's spawn_request towards us fails locally with `notsup`.
+  # DFLAG_SPAWN is left out so the remote's spawn_request towards us fails with notsup.
   @flags @mandatory_25 ||| @mandatory_26 ||| @dist_monitor
 
-  @type peer :: %{name: String.t(), creation: non_neg_integer()}
-
-  @doc """
-  Runs the version 6 (OTP 23+) handshake as a hidden node on a `{:packet, 2}`
-  socket. Returns the remote node's announced name and creation.
-  """
+  @doc "Version 6 (OTP 23+) handshake as a hidden node on a `{:packet, 2}` socket."
   @spec run(:gen_tcp.socket(), String.t(), String.t(), non_neg_integer(), timeout()) ::
-          {:ok, peer()} | {:error, term()}
+          {:ok, remote_name :: String.t()} | {:error, term()}
   def run(socket, me, cookie, creation, timeout) do
     with :ok <- :gen_tcp.send(socket, send_name(me, creation)),
          {:ok, status} <- recv(socket, timeout),
          :ok <- check_status(status),
          {:ok, challenge_msg} <- recv(socket, timeout),
-         {:ok, challenge, peer} <- parse_challenge(challenge_msg),
-         mine = random_u32(),
+         {:ok, challenge, remote_name} <- parse_challenge(challenge_msg),
+         mine = :rand.uniform(0xFFFFFFFE),
          :ok <- :gen_tcp.send(socket, <<?r, mine::32, digest(cookie, challenge)::binary>>) do
       expected = digest(cookie, mine)
 
       case recv(socket, timeout) do
-        {:ok, <<?a, ^expected::binary-size(16)>>} -> {:ok, peer}
+        {:ok, <<?a, ^expected::binary-size(16)>>} -> {:ok, remote_name}
         {:ok, _other} -> {:error, :bad_cookie}
         {:error, :closed} -> {:error, :bad_cookie}
         {:error, _} = error -> error
@@ -46,14 +41,13 @@ defmodule Voyager.Services.DistClient.Handshake do
   end
 
   defp check_status(<<?s, "ok">>), do: :ok
-  defp check_status(<<?s, "ok_simultaneous">>), do: :ok
   defp check_status(<<?s, status::binary>>), do: {:error, {:handshake_failed, status}}
   defp check_status(_other), do: {:error, {:handshake_failed, :unexpected}}
 
   defp parse_challenge(
-         <<?N, _flags::64, challenge::32, creation::32, len::16, name::binary-size(len)>>
+         <<?N, _flags::64, challenge::32, _cre::32, len::16, name::binary-size(len)>>
        ),
-       do: {:ok, challenge, %{name: name, creation: creation}}
+       do: {:ok, challenge, name}
 
   defp parse_challenge(_other), do: {:error, {:handshake_failed, :unexpected}}
 
@@ -66,6 +60,4 @@ defmodule Voyager.Services.DistClient.Handshake do
   end
 
   defp digest(cookie, challenge), do: :erlang.md5([cookie, Integer.to_string(challenge)])
-
-  defp random_u32, do: :rand.uniform(0xFFFFFFFE)
 end

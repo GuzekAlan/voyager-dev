@@ -6,11 +6,12 @@ defmodule Voyager.Pid do
   """
 
   alias Voyager.Erpc
+  alias Voyager.Services.DistClient.Frame
   alias Voyager.Settings
 
   @format_key {__MODULE__, :format}
   @node_id_key {__MODULE__, :node_id}
-  @node_pid_key {__MODULE__, :node_pid}
+  @connected_key {__MODULE__, :connected}
   @formats [:distribution, :local]
 
   @spec parse(String.t()) :: pid() | nil
@@ -25,13 +26,13 @@ defmodule Voyager.Pid do
 
   @spec put_node(node() | nil) :: :ok
   def put_node(nil) do
-    :persistent_term.put(@node_pid_key, nil)
+    :persistent_term.put(@connected_key, nil)
     :persistent_term.put(@node_id_key, nil)
   end
 
   def put_node(node) do
     pid = node_pid(node)
-    :persistent_term.put(@node_pid_key, pid)
+    :persistent_term.put(@connected_key, pid && {Atom.to_string(node(pid)), creation(pid)})
     :persistent_term.put(@node_id_key, pid && node_id(pid))
   end
 
@@ -97,28 +98,20 @@ defmodule Voyager.Pid do
     id
   end
 
-  # Without distribution `list_to_pid/1` rejects remote pids, so rebuild one from
-  # the connected node's name and creation, taken from a pid it returned.
+  # Without distribution `list_to_pid/1` rejects remote pids.
   defp parse_connected(pid_str) do
-    with %{} = node <- connected_node(),
+    with {name, creation} <- :persistent_term.get(@connected_key, nil),
          [_, id, number, serial] <- Regex.run(~r/^<(\d+)\.(\d+)\.(\d+)>$/, pid_str),
-         true <- id == node.id do
-      :erlang.binary_to_term(
-        <<131, 88, node.atom::binary, String.to_integer(number)::32,
-          String.to_integer(serial)::32, node.creation::32>>
-      )
+         true <- id == cached_node_id() do
+      Frame.pid(name, creation, String.to_integer(number), String.to_integer(serial))
     else
       _ -> nil
     end
   end
 
-  defp connected_node do
-    with pid when is_pid(pid) <- :persistent_term.get(@node_pid_key, nil),
-         <<131, 88, rest::binary>> <- :erlang.term_to_binary(pid) do
-      atom_size = byte_size(rest) - 12
-      <<atom::binary-size(^atom_size), _number::32, _serial::32, creation::32>> = rest
-      %{atom: atom, creation: creation, id: cached_node_id()}
-    end
+  defp creation(pid) do
+    bin = :erlang.term_to_binary(pid)
+    :binary.decode_unsigned(binary_part(bin, byte_size(bin), -4))
   end
 
   defp normalize_format(format) when format in @formats, do: format

@@ -10,6 +10,7 @@ defmodule Voyager.Services.DistClient.Frame do
   def decode(<<>>), do: :tick
 
   def decode(<<@pass_through, rest::binary>>) do
+    # Not :safe: remote module and registered names are new atoms, so the atom table is the ceiling.
     {control, used} = :erlang.binary_to_term(rest, [:used])
     <<_control::binary-size(^used), payload::binary>> = rest
     {:control, control, payload}
@@ -29,9 +30,9 @@ defmodule Voyager.Services.DistClient.Frame do
   def exit2(from, to, reason), do: encode({@exit2, from, to, reason})
 
   @doc "A pid of node `name`, built from ETF so it works without distribution."
-  @spec pid(String.t(), non_neg_integer()) :: pid()
-  def pid(name, creation) do
-    :erlang.binary_to_term(<<131, 88, atom(name)::binary, 1::32, 0::32, creation::32>>)
+  @spec pid(String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer()) :: pid()
+  def pid(name, creation, number \\ 1, serial \\ 0) do
+    :erlang.binary_to_term(<<131, 88, atom(name)::binary, number::32, serial::32, creation::32>>)
   end
 
   @spec ref(String.t(), non_neg_integer(), non_neg_integer()) :: reference()

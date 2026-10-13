@@ -24,6 +24,13 @@ defmodule Voyager.Services.DistClient do
   @max_frame 64 * 1024 * 1024
   @max_heap_words 32 * 1024 * 1024
 
+  @send 2
+  @monitor_p_exit 21
+  @send_sender 22
+  @payload_monitor_p_exit 28
+  @spawn_reply 31
+  @alias_send 33
+
   @type opts :: [
           node: node(),
           address: :inet.ip_address() | charlist(),
@@ -32,12 +39,12 @@ defmodule Voyager.Services.DistClient do
           name_type: :longnames | :shortnames
         ]
 
-  @typedoc "Raw outcome of a call; `Voyager.Erpc.Socket` maps it to `:erpc.call/5` semantics."
   @type outcome :: {:down, term()} | {:spawn_error, term()} | :timeout
 
   @spec start(opts()) :: {:ok, pid()} | {:error, term()}
   def start(opts), do: DynamicSupervisor.start_child(@supervisor, {__MODULE__, opts})
 
+  @spec start_link(opts()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @spec stop(pid()) :: :ok
@@ -80,7 +87,7 @@ defmodule Voyager.Services.DistClient do
     creation = Handshake.random_creation()
 
     with {:ok, socket} <- connect(opts[:address], opts[:port]),
-         {:ok, _peer} <- handshake(socket, me, opts[:cookie], creation),
+         :ok <- handshake(socket, node, me, opts[:cookie], creation),
          {:ok, _owner} <- Registry.register(@registry, node, String.to_atom(me)) do
       :ok = :inet.setopts(socket, packet: 4, packet_size: @max_frame, active: :once)
       schedule_tick()
@@ -108,7 +115,7 @@ defmodule Voyager.Services.DistClient do
     request =
       Frame.spawn_request(ref, state.self_pid, {:erpc, :execute_call, [ref, mod, fun, args]})
 
-    case :gen_tcp.send(state.socket, request) do
+    case send_frame(state, request) do
       :ok ->
         call = %{from: from, timer: start_timer(ref, timeout), remote_pid: nil}
 
@@ -133,12 +140,16 @@ defmodule Voyager.Services.DistClient do
     do: {:stop, {:shutdown, reason}, state}
 
   def handle_info(:tick, state) do
-    if now() - state.last_recv > @net_ticktime do
-      {:stop, {:shutdown, :tick_timeout}, state}
-    else
-      :ok = :gen_tcp.send(state.socket, <<>>)
-      schedule_tick()
-      {:noreply, state}
+    cond do
+      now() - state.last_recv > @net_ticktime ->
+        {:stop, {:shutdown, :tick_timeout}, state}
+
+      send_frame(state, <<>>) == :ok ->
+        schedule_tick()
+        {:noreply, state}
+
+      true ->
+        {:stop, {:shutdown, :closed}, state}
     end
   end
 
@@ -159,7 +170,7 @@ defmodule Voyager.Services.DistClient do
 
   defp handle_frame(:tick, state), do: state
 
-  defp handle_frame({:control, {31, ref, _to, _flags, remote_pid}, _payload}, state)
+  defp handle_frame({:control, {@spawn_reply, ref, _to, _flags, remote_pid}, _payload}, state)
        when is_pid(remote_pid) do
     case state.pending do
       %{^ref => call} ->
@@ -170,16 +181,17 @@ defmodule Voyager.Services.DistClient do
     end
   end
 
-  defp handle_frame({:control, {31, ref, _to, _flags, reason}, _payload}, state),
+  defp handle_frame({:control, {@spawn_reply, ref, _to, _flags, reason}, _payload}, state),
     do: finish(state, ref, {:spawn_error, reason})
 
-  defp handle_frame({:control, {21, _from, _to, ref, reason}, _payload}, state),
+  defp handle_frame({:control, {@monitor_p_exit, _from, _to, ref, reason}, _payload}, state),
     do: finish(state, ref, {:down, reason})
 
-  defp handle_frame({:control, {28, _from, _to, ref}, payload}, state),
+  defp handle_frame({:control, {@payload_monitor_p_exit, _from, _to, ref}, payload}, state),
     do: finish(state, ref, {:down, :erlang.binary_to_term(payload)})
 
-  defp handle_frame({:control, {op, _from, _to}, payload}, state) when op in [2, 22, 33] do
+  defp handle_frame({:control, {op, _from, _to}, payload}, state)
+       when op in [@send, @send_sender, @alias_send] do
     case :erlang.binary_to_term(payload) do
       {:io_request, from, reply_as, request} when is_pid(from) ->
         send_frame(state, Frame.send(from, {:io_reply, reply_as, io_result(request)}))
@@ -191,14 +203,8 @@ defmodule Voyager.Services.DistClient do
     state
   end
 
-  defp handle_frame({:control, control, _payload}, state)
-       when is_tuple(control) and tuple_size(control) > 0 do
-    drop(state, elem(control, 0))
-    state
-  end
-
-  defp handle_frame(_frame, state) do
-    drop(state, :unknown)
+  defp handle_frame(frame, state) do
+    drop(state, opcode(frame))
     state
   end
 
@@ -225,6 +231,11 @@ defmodule Voyager.Services.DistClient do
     Logger.warning("Dropped distribution message #{inspect(op)} from #{state.node}")
   end
 
+  defp opcode({:control, control, _payload}) when is_tuple(control) and tuple_size(control) > 0,
+    do: elem(control, 0)
+
+  defp opcode(_frame), do: :unknown
+
   defp send_frame(state, frame), do: :gen_tcp.send(state.socket, frame)
 
   defp connect(address, port) do
@@ -237,15 +248,18 @@ defmodule Voyager.Services.DistClient do
     end
   end
 
-  defp handshake(socket, me, cookie, creation) do
-    case Handshake.run(socket, me, cookie, creation, @connect_timeout) do
-      {:ok, peer} ->
-        {:ok, peer}
+  defp handshake(socket, node, me, cookie, creation) do
+    expected = Atom.to_string(node)
 
-      {:error, _} = error ->
-        :gen_tcp.close(socket)
-        error
-    end
+    result =
+      case Handshake.run(socket, me, cookie, creation, @connect_timeout) do
+        {:ok, ^expected} -> :ok
+        {:ok, _other} -> {:error, {:handshake_failed, :name_mismatch}}
+        {:error, _} = error -> error
+      end
+
+    if result != :ok, do: :gen_tcp.close(socket)
+    result
   end
 
   defp local_name(name_type) do

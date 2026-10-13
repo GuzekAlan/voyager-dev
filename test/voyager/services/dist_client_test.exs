@@ -2,8 +2,12 @@ defmodule Voyager.Services.DistClientTest do
   # async: false because the tests assert this VM never becomes distributed.
   use ExUnit.Case, async: false
 
+  import Mox
+
+  alias Voyager.Agent
   alias Voyager.Erpc
   alias Voyager.Erpc.Socket
+  alias Voyager.NodeSession.Connectors
   alias Voyager.Services.DistClient
 
   @moduletag :integration
@@ -65,6 +69,33 @@ defmodule Voyager.Services.DistClientTest do
     stop_peer(peer)
 
     assert_receive {:DOWN, ^ref, :process, ^client, {:shutdown, :closed}}, 5_000
+  end
+
+  test "installs the agent watching the client's node name", %{peer: peer, node: node} = ctx do
+    stub_with(Voyager.ErpcMock, Socket)
+    start_supervised!({DistClient, ctx.opts})
+
+    assert Agent.install(node) == :ok
+
+    agent = :peer.call(peer, :erlang, :whereis, [Agent.module()])
+    {:state, watched} = :peer.call(peer, :sys, :get_state, [agent])
+    assert Map.keys(watched) == [DistClient.local_node(node)]
+  end
+
+  test "parses pid strings of the connected node", %{node: node} = ctx do
+    stub_with(Voyager.ErpcMock, Socket)
+    start_supervised!({DistClient, ctx.opts})
+    on_exit(fn -> Voyager.Pid.put_node(nil) end)
+
+    Voyager.Pid.put_node(node)
+    pid = Socket.call(node, :erlang, :whereis, [:init], 5_000)
+
+    assert pid |> Voyager.Pid.format(:distribution) |> Voyager.Pid.parse() == pid
+  end
+
+  test "the socket connector reports a node missing from epmd" do
+    assert Connectors.Socket.connect("nobody@127.0.0.1", @cookie, []) ==
+             {:error, :node_not_registered}
   end
 
   test "the node cannot run code in this VM", %{peer: peer, node: node} = ctx do

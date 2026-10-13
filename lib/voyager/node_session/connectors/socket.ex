@@ -20,14 +20,8 @@ defmodule Voyager.NodeSession.Connectors.Socket do
          address = Distribution.host_address(host),
          {:ok, port} <- epmd_port(name, address),
          node = String.to_atom(node_name),
-         {:ok, client} <-
-           DistClient.start(
-             node: node,
-             address: address,
-             port: port,
-             cookie: cookie,
-             name_type: Keyword.get(opts, :name_type, :longnames)
-           ) do
+         client_opts = [node: node, address: address, port: port, cookie: cookie],
+         {:ok, client} <- DistClient.start(Keyword.take(opts, [:name_type]) ++ client_opts) do
       {:ok, node, %{client: client, monitor: Process.monitor(client)}}
     end
   end

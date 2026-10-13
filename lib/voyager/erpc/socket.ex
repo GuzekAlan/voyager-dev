@@ -17,8 +17,7 @@ defmodule Voyager.Erpc.Socket do
 
   def call(node, mod, fun, args, timeout) do
     case DistClient.whereis(node) do
-      # SSH sessions still connect through Erlang distribution.
-      nil -> :erpc.call(node, mod, fun, args, timeout)
+      nil -> :erlang.error({:erpc, :noconnection})
       client -> client |> DistClient.call(mod, fun, args, timeout) |> result()
     end
   end
