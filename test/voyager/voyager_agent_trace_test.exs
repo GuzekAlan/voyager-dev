@@ -6,6 +6,7 @@ defmodule VoyagerAgentTraceTest do
   alias Voyager.Test.VoyagerAgentFixture
 
   @agent_module Voyager.Agent.module()
+  @leap_year [module: "Elixir.Date", function: "leap_year?", arity: 1]
   @limits %{max_events: 1_000, max_rate: 1_000, max_time_ms: 5_000, budget: 50}
 
   setup do
@@ -95,6 +96,27 @@ defmodule VoyagerAgentTraceTest do
 
     assert {[%{type: :call, mfa: {Date, :leap_year?, 1}, pid: ^other}], :event_limit, _stats} =
              collect(tracer)
+  end
+
+  test "existing processes skips processes spawned after the start" do
+    {:ok, tracer} = start(spec(@leap_year ++ [processes: :existing]), %{@limits | max_events: 1})
+    later = start_supervised!({Agent, fn -> nil end})
+
+    Agent.get(later, fn _ -> Date.leap_year?(~D[2024-01-01]) end)
+    Date.leap_year?(~D[2024-01-01])
+
+    assert {[%{pid: pid}], :event_limit, _stats} = collect(tracer)
+    assert pid == self()
+  end
+
+  test "new processes skips processes that existed before the start" do
+    {:ok, tracer} = start(spec(@leap_year ++ [processes: :new]), %{@limits | max_events: 1})
+    later = start_supervised!({Agent, fn -> nil end})
+
+    Date.leap_year?(~D[2024-01-01])
+    Agent.get(later, fn _ -> Date.leap_year?(~D[2024-01-01]) end)
+
+    assert {[%{pid: ^later}], :event_limit, _stats} = collect(tracer)
   end
 
   test "return trace pairs a call with its return value" do
@@ -238,10 +260,13 @@ defmodule VoyagerAgentTraceTest do
     assert {:error, {:invalid, :module}} = start(spec(module: "_"), @limits)
   end
 
-  test "hot modules are refused on all processes but allowed on a pid list" do
+  test "hot modules are refused on process sets but allowed on a pid list" do
     lists = [module: "lists", function: "reverse", arity: 1]
 
-    assert {:error, {:refused, :lists}} = start(spec(lists ++ [processes: :all]), @limits)
+    for set <- [:all, :existing, :new] do
+      assert {:error, {:refused, :lists}} = start(spec(lists ++ [processes: set]), @limits)
+    end
+
     assert {:ok, _tracer} = start(spec(lists), @limits)
   end
 
@@ -269,6 +294,7 @@ defmodule VoyagerAgentTraceTest do
 
     assert {:ok, _tracer} = start(all, @limits)
     assert {:error, :all_processes_busy} = start(all, @limits)
+    assert {:error, :all_processes_busy} = start(spec(@leap_year ++ [processes: :new]), @limits)
     assert {:ok, _tracer} = start(spec(), @limits)
     assert @agent_module.trace_sessions() == 2
   end

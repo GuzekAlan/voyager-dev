@@ -655,6 +655,7 @@ bound_records([Record | Rest], Budget, Truncated, Acc) ->
 -define(TRACE_SPEC_FIELDS,
         [module, function, arity, processes, capture, scope, return_trace, match_spec]).
 -define(TRACE_LIMITS, [max_events, max_rate, max_time_ms]).
+-define(TRACE_PROCESS_SETS, [all, existing, new]).
 -define(TRACE_ALWAYS_REFUSED, [?MODULE, trace]).
 %% Called from nearly every process: an all-process call trace on them floods the tracer.
 -define(TRACE_HOT,
@@ -684,7 +685,7 @@ bound_records([Record | Rest], Budget, Truncated, Acc) ->
     #{module := binary(),
       function := binary() | '_',
       arity := 0..255 | '_',
-      processes := all | [pid()],
+      processes := all | existing | new | [pid()],
       capture := arity | args,
       scope := local | global,
       return_trace := boolean(),
@@ -773,11 +774,11 @@ valid_spec_value(scope, Scope) ->
     Scope =:= local orelse Scope =:= global;
 valid_spec_value(return_trace, ReturnTrace) ->
     is_boolean(ReturnTrace);
-valid_spec_value(processes, all) ->
-    true;
 valid_spec_value(processes, Pids)
     when is_list(Pids), length(Pids) > 0, length(Pids) =< ?TRACE_MAX_PIDS ->
     lists:all(fun(Pid) -> is_pid(Pid) andalso node(Pid) =:= node() end, Pids);
+valid_spec_value(processes, ProcessSet) ->
+    lists:member(ProcessSet, ?TRACE_PROCESS_SETS);
 valid_spec_value(match_spec, undefined) ->
     true;
 valid_spec_value(match_spec, MatchSpec)
@@ -838,12 +839,12 @@ traceable(Module, Processes) ->
             ok
     end.
 
-refused(Module, all) ->
+refused(Module, Pids) when is_list(Pids) ->
+    lists:member(Module, ?TRACE_ALWAYS_REFUSED);
+refused(Module, _ProcessSet) ->
     refused(Module, [])
     orelse lists:member(Module, ?TRACE_HOT)
-    orelse hot_prefix(atom_to_binary(Module));
-refused(Module, _Pids) ->
-    lists:member(Module, ?TRACE_ALWAYS_REFUSED).
+    orelse hot_prefix(atom_to_binary(Module)).
 
 hot_prefix(<<"prim_", _/binary>>) ->
     true;
@@ -952,10 +953,10 @@ tracer_init(Caller, Ref, Collector, {_, _, _, Processes, _, Limits} = Plan) ->
             Caller ! {Ref, Error}
     end.
 
-session_name(all) ->
-    voyager_all;
-session_name(_Pids) ->
-    voyager.
+session_name(Pids) when is_list(Pids) ->
+    voyager;
+session_name(_ProcessSet) ->
+    voyager_all.
 
 tracer_install(Session, {MFA, Scope, MatchSpec, Processes, Flags, _Limits}) ->
     maybe
@@ -987,11 +988,6 @@ trace_function(Session, MFA, MatchSpec, Scope) ->
             ok
     end.
 
-trace_processes(Session, all, Flags) ->
-    trace:process(Session, all, true, Flags),
-    %% `all' includes this process, and a tracer tracing itself gets no messages.
-    trace:process(Session, self(), false, [all]),
-    ok;
 trace_processes(_Session, [], _Flags) ->
     ok;
 trace_processes(Session, [Pid | Rest], Flags) ->
@@ -1001,7 +997,12 @@ trace_processes(Session, [Pid | Rest], Flags) ->
     catch
         error:badarg ->
             {error, {noproc, Pid}}
-    end.
+    end;
+trace_processes(Session, ProcessSet, Flags) ->
+    trace:process(Session, ProcessSet, true, Flags),
+    %% `all' and `existing' include this process, and a tracer tracing itself gets no messages.
+    trace:process(Session, self(), false, [all]),
+    ok.
 
 %% `max_heap_size' does not count an off-heap mailbox, so the tracer checks its own queue.
 tracer_loop(T) ->
