@@ -14,8 +14,6 @@ defmodule Voyager.Services.DistClient do
   alias Voyager.Services.DistClient.Frame
   alias Voyager.Services.DistClient.Handshake
 
-  require Logger
-
   @registry Voyager.Services.DistClient.Registry
   @supervisor Voyager.Services.DistClient.Supervisor
   @connect_timeout 5_000
@@ -54,6 +52,9 @@ defmodule Voyager.Services.DistClient do
   catch
     :exit, _ -> :ok
   end
+
+  @spec enabled?() :: boolean()
+  def enabled?, do: Voyager.Erpc.impl() == Voyager.Erpc.Socket
 
   @spec whereis(node()) :: pid() | nil
   def whereis(node) do
@@ -207,14 +208,14 @@ defmodule Voyager.Services.DistClient do
         state
 
       {:ok, _message} ->
-        drop(state, op)
+        state
 
       :rejected ->
         :rejected
     end
   end
 
-  defp handle_frame(frame, state), do: drop(state, opcode(frame))
+  defp handle_frame(_frame, state), do: state
 
   defp finish(state, ref, outcome) do
     case Map.pop(state.pending, ref) do
@@ -234,16 +235,6 @@ defmodule Voyager.Services.DistClient do
        do: :ok
 
   defp io_result(_request), do: {:error, :enotsup}
-
-  defp drop(state, op) do
-    Logger.debug("Dropped distribution message #{inspect(op)} from #{state.node}")
-    state
-  end
-
-  defp opcode({:control, control, _payload}) when is_tuple(control) and tuple_size(control) > 0,
-    do: elem(control, 0)
-
-  defp opcode(_frame), do: :unknown
 
   defp send_frame(state, frame), do: :gen_tcp.send(state.socket, frame)
 

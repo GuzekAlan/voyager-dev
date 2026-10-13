@@ -55,8 +55,7 @@ defmodule Voyager.Services.DistClient.Frame do
     ArgumentError -> to_term_with_new_atoms(binary, opts)
   end
 
-  # Remote module and registered names are new atoms; every atom needs a tag byte, so the
-  # tag count bounds how many one frame can create before the atom table aborts the VM.
+  # Each new atom needs a tag byte, so counting tags caps the atoms one frame can create.
   defp to_term_with_new_atoms(binary, opts) do
     new_atoms = length(:binary.matches(binary, @atom_tags))
     budget = div(:erlang.system_info(:atom_limit) * 9, 10) - :erlang.system_info(:atom_count)

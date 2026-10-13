@@ -139,22 +139,26 @@ defmodule Voyager.Services.RemoteNodeConnector do
     end
   end
 
-  defp socket?, do: Application.get_env(:voyager, :erpc) == Voyager.Erpc.Socket
-
   defp ensure_distributed(name_type) do
-    if socket?(), do: :ok, else: Distribution.ensure_distributed(name_type)
+    if DistClient.enabled?(), do: :ok, else: Distribution.ensure_distributed(name_type)
   end
 
   defp connect_fun(remote_node, cookie, name_type) do
-    if socket?(),
+    if DistClient.enabled?(),
       do: &start_client(remote_node, cookie, name_type, &1),
       else: fn _local_port -> connect_distribution(remote_node, cookie) end
   end
 
   defp start_client(remote_node, cookie, name_type, local_port) do
-    opts = [node: remote_node, address: {127, 0, 0, 1}, port: local_port, cookie: cookie]
+    opts = [
+      node: remote_node,
+      address: {127, 0, 0, 1},
+      port: local_port,
+      cookie: cookie,
+      name_type: name_type
+    ]
 
-    case DistClient.start([name_type: name_type] ++ opts) do
+    case DistClient.start(opts) do
       {:ok, _client} -> :ok
       {:error, _} = error -> error
     end

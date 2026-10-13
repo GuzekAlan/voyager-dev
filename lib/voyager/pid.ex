@@ -32,7 +32,7 @@ defmodule Voyager.Pid do
 
   def put_node(node) do
     pid = node_pid(node)
-    :persistent_term.put(@connected_key, pid && {Atom.to_string(node(pid)), creation(pid)})
+    :persistent_term.put(@connected_key, pid && {Atom.to_string(node), creation(pid)})
     :persistent_term.put(@node_id_key, pid && node_id(pid))
   end
 
@@ -85,6 +85,7 @@ defmodule Voyager.Pid do
     ArgumentError -> nil
   end
 
+  # Any pid of the node, printed here, carries the `N` this node gives it.
   defp node_pid(node) do
     case Erpc.safe_call(node, :erlang, :self, []) do
       {:ok, pid} when is_pid(pid) -> pid
@@ -92,7 +93,6 @@ defmodule Voyager.Pid do
     end
   end
 
-  # Any pid of the node, printed here, carries the `N` this node gives it.
   defp node_id(pid) do
     [_prefix, id] = Regex.run(~r/^<(\d+)\./, format(pid, :distribution))
     id

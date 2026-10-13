@@ -46,7 +46,10 @@ defmodule Voyager.NodeSession.Connectors.Ssh do
   end
 
   @impl true
-  def disconnect(_node, %{conn_ref: conn_ref}), do: RemoteNodeConnector.stop(conn_ref)
+  def disconnect(node, %{conn_ref: conn_ref}) do
+    if client = DistClient.whereis(node), do: DistClient.stop(client)
+    RemoteNodeConnector.stop(conn_ref)
+  end
 
   @impl true
   def subscriptions, do: [TunnelRegistry.topic()]

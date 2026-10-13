@@ -7,6 +7,8 @@ defmodule Voyager.NodeSession do
 
   alias Voyager.Agent
   alias Voyager.NodeSession.Connectors.Distribution
+  alias Voyager.NodeSession.Connectors.Socket
+  alias Voyager.Services.DistClient
 
   @default_connector Distribution
 
@@ -35,10 +37,10 @@ defmodule Voyager.NodeSession do
     :persistent_term.get(@connector_name_cache_key, nil)
   end
 
-  @doc "Connects via the `:node_connector` configured connector, distribution by default."
+  @doc "Connects directly, through `Connectors.Socket` when `DistClient.enabled?/0`."
   @spec connect(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def connect(node_name, cookie, opts \\ []) do
-    connector = Application.get_env(:voyager, :node_connector, @default_connector)
+    connector = if DistClient.enabled?(), do: Socket, else: @default_connector
     connect_via(connector, node_name, cookie, opts)
   end
 
