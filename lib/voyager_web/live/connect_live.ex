@@ -3,6 +3,7 @@ defmodule VoyagerWeb.ConnectLive do
 
   alias Voyager.NodeSession
   alias VoyagerWeb.ConnectComponents
+  alias VoyagerWeb.ConnectLive.ConnectError
 
   @impl true
   def mount(_params, _session, socket) do
@@ -141,9 +142,11 @@ defmodule VoyagerWeb.ConnectLive do
     {:noreply, assign(socket, :connecting?, true)}
   end
 
-  # The form that started the connect shows the error from its own connect result.
-  def handle_info({:node_connect_failed, _node_name, _reason}, socket) do
-    {:noreply, assign(socket, :connecting?, false)}
+  def handle_info({:node_connect_failed, _node_name, reason}, socket) do
+    socket
+    |> assign(:connecting?, false)
+    |> put_flash(:error, ConnectError.message(reason))
+    |> noreply()
   end
 
   def handle_info({:node_connected, _node}, socket) do

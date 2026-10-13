@@ -9,11 +9,22 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   alias Voyager.NodeSession.Connectors.Ssh, as: SshConnector
   alias Voyager.Queries.SshConnections, as: SshConnectionQueries
   alias VoyagerWeb.ConnectComponents
+  alias VoyagerWeb.ConnectLive.ConnectError
   alias VoyagerWeb.ConnectLive.RecentConnections
   alias VoyagerWeb.ConnectLive.SecretVisibility
   alias VoyagerWeb.FormSchemas.SshConnectionParams
 
   @id_prefix "ssh-"
+  @ssh_host_errors [
+    :etimedout,
+    :econnrefused,
+    :nxdomain,
+    :ehostunreach,
+    :enetunreach,
+    :enetdown,
+    :ehostdown
+  ]
+
   @impl true
   def mount(socket) do
     socket
@@ -370,74 +381,21 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   end
 
   defp put_connect_error(socket, reason) do
-    {field, msg} = ssh_connect_error(reason)
-
     form =
       socket.assigns.ssh_form.params
       |> SshConnectionParams.changeset()
-      |> Ecto.Changeset.add_error(field, msg)
+      |> Ecto.Changeset.add_error(error_field(reason), ConnectError.message(reason))
       |> Map.put(:action, :insert)
       |> to_form(as: :ssh)
 
     assign(socket, :ssh_form, form)
   end
 
-  defp ssh_connect_error({:invalid_node_name, _}), do: {:node_name, "Use the name@host format"}
+  defp error_field({:invalid_host, _}), do: :ssh_host
+  defp error_field(reason) when is_list(reason), do: :ssh_user
 
-  defp ssh_connect_error({:invalid_host, _}),
-    do: {:ssh_host, "Invalid host — check the SSH hostname"}
+  defp error_field(reason) when reason in @ssh_host_errors, do: :ssh_host
 
-  defp ssh_connect_error(reason) when is_list(reason),
-    do:
-      {:ssh_user,
-       "SSH authentication failed — check your credentials or ensure the SSH agent is running"}
-
-  defp ssh_connect_error(:etimedout),
-    do: {:ssh_host, "Connection timed out — check the SSH host and port"}
-
-  defp ssh_connect_error(:econnrefused),
-    do: {:ssh_host, "Connection refused — check the SSH host and port"}
-
-  defp ssh_connect_error(:nxdomain),
-    do: {:ssh_host, "Host not found — check the SSH hostname"}
-
-  defp ssh_connect_error(reason)
-       when reason in [:ehostunreach, :enetunreach, :enetdown, :ehostdown],
-       do: {:ssh_host, "Host unreachable — check the SSH hostname and your network"}
-
-  defp ssh_connect_error({:node_not_found, _, _}),
-    do:
-      {:node_name,
-       "Node not found on remote epmd — check the node name, or set a custom EPMD port in Advanced"}
-
-  defp ssh_connect_error(:invalid_epmd_response),
-    do: {:node_name, "Unexpected response from remote epmd — check the EPMD port in Advanced"}
-
-  defp ssh_connect_error(:node_connect_failed),
-    do: {:cookie, "Handshake failed — the Erlang cookie does not match"}
-
-  defp ssh_connect_error(:not_distributed),
-    do: {:node_name, "Failed to start local Erlang distribution"}
-
-  defp ssh_connect_error({:net_kernel, _}),
-    do: {:node_name, "Failed to start local Erlang distribution"}
-
-  defp ssh_connect_error({:net_kernel_stop, _}),
-    do: {:node_name, "Failed to restart local Erlang distribution"}
-
-  defp ssh_connect_error(:invalid_name_type),
-    do: {:node_name, "Invalid name type"}
-
-  defp ssh_connect_error(:unexpected_exit),
-    do: {:node_name, "Connection attempt failed unexpectedly"}
-
-  defp ssh_connect_error({:agent_install_failed, {:otp_too_old, release}}),
-    do:
-      {:node_name,
-       "Node runs OTP #{release} - Voyager requires OTP #{Voyager.Agent.min_otp()} or newer"}
-
-  defp ssh_connect_error({:agent_install_failed, _}),
-    do: {:node_name, "Could not load the Voyager agent on the node"}
-
-  defp ssh_connect_error(_), do: {:node_name, "Could not connect to remote node"}
+  defp error_field(:node_connect_failed), do: :cookie
+  defp error_field(_reason), do: :node_name
 end

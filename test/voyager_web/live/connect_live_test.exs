@@ -83,7 +83,9 @@ defmodule VoyagerWeb.ConnectLiveTest do
   end
 
   describe "connect status" do
-    test "disables the form while connecting and re-enables it on failure", %{conn: conn} do
+    test "disables the form while connecting and flashes a failure started elsewhere", %{
+      conn: conn
+    } do
       {:ok, view, _html} = live(conn, ~p"/")
 
       send(view.pid, {:node_connecting, "demo@localhost"})
@@ -91,7 +93,7 @@ defmodule VoyagerWeb.ConnectLiveTest do
 
       send(view.pid, {:node_connect_failed, "demo@localhost", :bad_cookie})
       assert has_element?(view, ~s|#direct-connect-btn:not([disabled])|)
-      refute has_element?(view, "#flash-error")
+      assert has_element?(view, "#flash-error", "Authentication failed")
     end
 
     test "shows the failure on the form that started the connect", %{conn: conn} do
@@ -111,7 +113,6 @@ defmodule VoyagerWeb.ConnectLiveTest do
       render_async(view)
 
       assert has_element?(view, "#ssh_node_name.input-error")
-      refute has_element?(view, "#flash-error")
     end
   end
 
