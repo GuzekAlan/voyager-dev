@@ -34,8 +34,9 @@ defmodule VoyagerAgentTraceTest do
     String.jaro_distance("a", "b")
 
     assert {[event], :event_limit, _stats} = collect(tracer)
-    assert %{type: :call, mfa: {String, :jaro_distance, 2}, pid: pid} = event
+    assert %{type: :call, mfa: {String, :jaro_distance, 2}, pid: pid, at: at} = event
     assert pid == self()
+    assert_in_delta at, System.os_time(:microsecond), 1_000_000
     refute Map.has_key?(event, :args)
   end
 

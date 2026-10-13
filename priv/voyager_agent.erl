@@ -1057,7 +1057,7 @@ value_event(Type, Value, Budget) ->
 tracer_event(#tracer{limits = Limits} = T0, Pid, Ts, {MFA, Event}) ->
     {Window, Rate} = tick(T0#tracer.window),
     {Label, Names} = process_label(Pid, T0#tracer.names),
-    At = erlang:convert_time_unit(Ts + erlang:time_offset(), native, microsecond),
+    At = erlang:convert_time_unit(Ts, nanosecond, microsecond) + erlang:time_offset(microsecond),
     T = T0#tracer{buffer =
                       [Event#{pid => Pid, process => Label, mfa => MFA, at => At}
                        | T0#tracer.buffer],
