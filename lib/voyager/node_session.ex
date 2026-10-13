@@ -35,10 +35,11 @@ defmodule Voyager.NodeSession do
     :persistent_term.get(@connector_name_cache_key, nil)
   end
 
-  @doc "Connects via the default distribution connector."
+  @doc "Connects via the `:node_connector` configured connector, distribution by default."
   @spec connect(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def connect(node_name, cookie, opts \\ []) do
-    connect_via(@default_connector, node_name, cookie, opts)
+    connector = Application.get_env(:voyager, :node_connector, @default_connector)
+    connect_via(connector, node_name, cookie, opts)
   end
 
   @doc "Connects using an explicit `Voyager.NodeSession.Connector` module."

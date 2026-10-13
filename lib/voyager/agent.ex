@@ -8,6 +8,7 @@ defmodule Voyager.Agent do
   alias Voyager.Erpc
   alias Voyager.NodeSession
   alias Voyager.Services.CodeInjector
+  alias Voyager.Services.DistClient
 
   @agent_source "voyager_agent.erl"
   @agent_path Path.expand("../../priv/#{@agent_source}", __DIR__)
@@ -138,7 +139,9 @@ defmodule Voyager.Agent do
   end
 
   defp register(node) do
-    case Erpc.safe_call(node, @agent, :register, [Node.self()], @remote_timeout) do
+    local_node = DistClient.local_node(node) || Node.self()
+
+    case Erpc.safe_call(node, @agent, :register, [local_node], @remote_timeout) do
       {:ok, {:ok, pid}} -> {:ok, pid}
       {:ok, {:error, reason}} -> {:error, {:register_failed, reason}}
       {:ok, other} -> {:error, {:register_failed, other}}
