@@ -155,7 +155,9 @@ defmodule VoyagerAgentTraceTest do
     for {match_spec, action} <- [
           {[{:_, [], [{:message, {{:ok, {:display, :x}}}}]}], :display},
           {[{:_, [{:is_list, {:current_stacktrace}}], []}], :current_stacktrace},
-          {[{:_, [], [{:set_tcw, 1}]}], :set_tcw}
+          {[{:_, [], [{:set_tcw, 1}]}], :set_tcw},
+          {[{:_, [], [{:message, false}, {:exception_trace}]}], :exception_trace},
+          {[{:_, [], [{:return_trace}]}], :return_trace}
         ] do
       assert {:error, {:refused_action, ^action}} = start(spec(match_spec: match_spec), @limits)
     end

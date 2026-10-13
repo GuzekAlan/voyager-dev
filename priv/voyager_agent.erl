@@ -665,7 +665,7 @@ bound_records([Record | Rest], Budget, Truncated, Acc) ->
          'Elixir.Access', 'Elixir.Enumerable', 'Elixir.List']).
 -define(TRACE_REFUSED_ACTIONS,
         [trace, enable_trace, disable_trace, silent, set_seq_token, process_dump, display,
-         current_stacktrace, caller_line, set_tcw]).
+         current_stacktrace, caller_line, set_tcw, return_trace, exception_trace]).
 
 -record(tracer,
         {session,
