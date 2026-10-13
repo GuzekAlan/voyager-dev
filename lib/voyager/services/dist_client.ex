@@ -23,7 +23,7 @@ defmodule Voyager.Services.DistClient do
   @idle_timeout :timer.minutes(5)
   @max_frame 16 * 1024 * 1024
   @max_heap_words 32 * 1024 * 1024
-  @max_session_atoms 50_000
+  @session_budget %{atoms: 50_000, funs: 10_000}
 
   @send 2
   @monitor_p_exit 21
@@ -116,7 +116,7 @@ defmodule Voyager.Services.DistClient do
          counter: 0,
          pending: %{},
          last_recv: now(),
-         atoms_left: @max_session_atoms
+         budget: @session_budget
        }}
     else
       {:error, reason} -> {:stop, reason}
@@ -145,11 +145,19 @@ defmodule Voyager.Services.DistClient do
   @impl GenServer
   def handle_info({:tcp, socket, data}, %{socket: socket} = state) do
     :ok = :inet.setopts(socket, active: :once)
-    atom_count = :erlang.system_info(:atom_count)
-    frame = Frame.decode(data, state.atoms_left)
-    atoms_left = state.atoms_left - (:erlang.system_info(:atom_count) - atom_count)
+    state = %{state | last_recv: now()}
 
-    case handle_frame(frame, %{state | last_recv: now(), atoms_left: max(atoms_left, 0)}) do
+    frame_state =
+      case Frame.decode(data, state.budget) do
+        {:control, control, payload, cost} ->
+          budget = %{atoms: state.budget.atoms - cost.atoms, funs: state.budget.funs - cost.funs}
+          handle_frame({:control, control, payload}, %{state | budget: budget})
+
+        frame ->
+          handle_frame(frame, state)
+      end
+
+    case frame_state do
       :rejected -> {:stop, {:shutdown, :rejected_frame}, state}
       state -> {:noreply, state}
     end

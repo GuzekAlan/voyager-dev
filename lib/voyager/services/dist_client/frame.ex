@@ -1,34 +1,34 @@
 defmodule Voyager.Services.DistClient.Frame do
   @moduledoc false
 
+  alias Voyager.Services.DistClient.Etf
+
   @pass_through 112
   @send 2
   @exit2 8
   @spawn_request 29
 
-  @atom_tags [100, 115, 118, 119]
+  @doc """
+  Decodes a frame whose control term may add at most `budget` entries to the
+  VM's atom and fun tables. Returns what it spent.
+  """
+  @spec decode(binary(), Etf.cost()) ::
+          :tick | {:control, term(), binary(), Etf.cost()} | :rejected
+  def decode(<<>>, _budget), do: :tick
 
-  @doc "Decodes a frame, creating at most `atom_budget` new atoms."
-  @spec decode(binary(), non_neg_integer()) :: :tick | {:control, term(), binary()} | :rejected
-  def decode(<<>>, _atom_budget), do: :tick
-
-  def decode(<<@pass_through, rest::binary>>, atom_budget) do
-    with {:ok, {control, used}} <- to_term(rest, [:used], atom_budget) do
+  def decode(<<@pass_through, rest::binary>>, budget) do
+    with {:ok, {control, used}, cost} <- to_term(rest, [:used], budget) do
       <<_control::binary-size(^used), payload::binary>> = rest
-      {:control, inert(control), payload}
+      {:control, inert(control), payload, cost}
     end
   end
 
-  def decode(_other, _atom_budget), do: :rejected
+  def decode(_other, _budget), do: :rejected
 
-  @doc "Decodes an unsolicited message payload; it may not create atoms."
+  @doc "Decodes an unsolicited message payload; it may not add atoms or funs."
   @spec decode_payload(binary()) :: {:ok, term()} | :rejected
-  def decode_payload(<<131, 80, _rest::binary>>), do: :rejected
-
   def decode_payload(payload) do
-    {:ok, inert(:erlang.binary_to_term(payload, [:safe]))}
-  rescue
-    ArgumentError -> :rejected
+    with {:ok, term, _cost} <- to_term(payload, [], %{atoms: 0, funs: 0}), do: {:ok, term}
   end
 
   @doc """
@@ -72,29 +72,18 @@ defmodule Voyager.Services.DistClient.Frame do
     :erlang.binary_to_term(<<131, 90, 3::16, atom(name)::binary, creation::32, ids::binary>>)
   end
 
-  # Distribution never compresses terms, and an inflated one bypasses max_heap_size.
-  defp to_term(<<131, 80, _rest::binary>>, _opts, _atom_budget), do: :rejected
+  defp to_term(binary, opts, budget) do
+    atom_headroom =
+      div(:erlang.system_info(:atom_limit) * 9, 10) - :erlang.system_info(:atom_count)
 
-  defp to_term(binary, opts, atom_budget) do
-    {:ok, :erlang.binary_to_term(binary, [:safe | opts])}
-  rescue
-    ArgumentError -> to_term_with_new_atoms(binary, opts, atom_budget)
-  end
-
-  # Each new atom needs a tag byte, so counting tags caps the atoms one frame can create.
-  defp to_term_with_new_atoms(binary, opts, atom_budget) do
-    headroom = div(:erlang.system_info(:atom_limit) * 9, 10) - :erlang.system_info(:atom_count)
-    budget = min(atom_budget, headroom)
-
-    if byte_size(binary) < budget or atom_tags(binary) < budget,
-      do: {:ok, :erlang.binary_to_term(binary, opts)},
-      else: :rejected
+    with {:ok, cost} <- Etf.scan(binary),
+         true <- cost.atoms <= min(budget.atoms, atom_headroom) and cost.funs <= budget.funs do
+      {:ok, :erlang.binary_to_term(binary, opts), cost}
+    else
+      _ -> :rejected
+    end
   rescue
     ArgumentError -> :rejected
-  end
-
-  defp atom_tags(binary) do
-    for <<byte <- binary>>, byte in @atom_tags, reduce: 0, do: (count -> count + 1)
   end
 
   # :maps keeps protocol dispatch on `__struct__` out of the walk.
