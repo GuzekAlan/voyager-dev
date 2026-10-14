@@ -40,8 +40,7 @@ do_setup(Kernel, Driver, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
     dist_util:reset_timer(Timer),
     case Driver:connect(Ip, Port, Options) of
         {ok, Socket} ->
-            Ctrl = spawn_link(fun() -> controller(Socket) end),
-            ok = gen_tcp:controlling_process(Socket, Ctrl),
+            Ctrl = spawn_link(fun() -> connection(Socket) end),
             dist_util:handshake_we_started(
               #hs_data{kernel_pid = Kernel,
                        other_node = Node,
@@ -52,15 +51,20 @@ do_setup(Kernel, Driver, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
                        other_version = Version,
                        request_type = Type,
                        reject_flags = ?REJECT_FLAGS,
-                       f_send = fun(C, Packet) -> call(C, {send, Packet}) end,
-                       f_recv = fun(C, Length, Timeout) -> call(C, {recv, Length, Timeout}) end,
-                       f_setopts_pre_nodeup = fun(C) -> call(C, {setopts, [{packet, 4}]}) end,
-                       f_setopts_post_nodeup = fun(C) -> call(C, {setopts, [{packet, 4}]}) end,
-                       f_getll = fun(C) -> {ok, C} end,
+                       f_send = fun(_, Packet) -> gen_tcp:send(Socket, Packet) end,
+                       f_recv = fun(_, Length, Timeout) -> gen_tcp:recv(Socket, Length, Timeout) end,
+                       f_setopts_pre_nodeup = fun(_) -> inet:setopts(Socket, [{packet, 4}]) end,
+                       f_setopts_post_nodeup = fun(_) -> inet:setopts(Socket, [{packet, 4}]) end,
+                       f_getll = fun(_) -> {ok, Ctrl} end,
                        f_address = fun(_, _) -> NetAddress end,
-                       f_handshake_complete = fun(C, _Node, DHandle) -> call(C, {handshake_complete, DHandle}) end,
-                       mf_tick = fun(C) -> C ! tick end,
-                       mf_getstat = fun(C) -> call(C, getstat) end,
+                       f_handshake_complete =
+                           fun(_, _, DHandle) ->
+                                   ok = gen_tcp:controlling_process(Socket, Ctrl),
+                                   Ctrl ! {handshake_complete, DHandle},
+                                   ok
+                           end,
+                       mf_tick = fun(_) -> Ctrl ! tick end,
+                       mf_getstat = fun(_) -> getstat(Socket) end,
                        mf_setopts = fun(_, _) -> {error, enotsup} end,
                        mf_getopts = fun(_, _) -> {error, enotsup} end});
         _ ->
@@ -72,47 +76,25 @@ allowed(<<>>) -> true;
 allowed(<<112, 131, 104, _Arity, 97, Op, _/binary>>) -> lists:member(Op, ?ALLOWED_OPS);
 allowed(_) -> false.
 
-controller(Socket) ->
-    receive
-        {Ref, From, {send, Packet}} -> reply(From, Ref, gen_tcp:send(Socket, Packet));
-        {Ref, From, {recv, Length, Timeout}} -> reply(From, Ref, gen_tcp:recv(Socket, Length, Timeout));
-        {Ref, From, {setopts, Opts}} -> reply(From, Ref, inet:setopts(Socket, Opts));
-        {Ref, From, getstat} -> reply(From, Ref, getstat(Socket));
-        {Ref, From, {handshake_complete, DHandle}} ->
-            Input = spawn_link(fun() -> input(DHandle, Socket) end),
-            ok = gen_tcp:controlling_process(Socket, Input),
-            ok = erlang:dist_ctrl_input_handler(DHandle, Input),
-            Input ! DHandle,
-            reply(From, Ref, ok),
-            erlang:dist_ctrl_get_data_notification(DHandle),
-            output(DHandle, Socket)
-    end,
-    controller(Socket).
+connection(Socket) ->
+    receive {handshake_complete, DHandle} -> ok end,
+    ok = inet:setopts(Socket, [binary, {active, once}]),
+    erlang:dist_ctrl_get_data_notification(DHandle),
+    loop(DHandle, Socket).
 
-input(DHandle, Socket) ->
-    receive DHandle -> ok end,
-    ok = inet:setopts(Socket, [binary]),
-    input_loop(DHandle, Socket).
-
-input_loop(DHandle, Socket) ->
-    ok = inet:setopts(Socket, [{active, once}]),
+loop(DHandle, Socket) ->
     receive
         {tcp, Socket, Data} ->
-            case allowed(Data) of
-                true -> erlang:dist_ctrl_put_data(DHandle, Data);
-                false -> ok
-            end,
-            input_loop(DHandle, Socket);
+            allowed(Data) andalso erlang:dist_ctrl_put_data(DHandle, Data),
+            ok = inet:setopts(Socket, [{active, once}]);
+        dist_data ->
+            send_data(DHandle, Socket);
+        tick ->
+            ok = gen_tcp:send(Socket, <<>>);
         {tcp_closed, Socket} ->
             exit(connection_closed)
-    end.
-
-output(DHandle, Socket) ->
-    receive
-        dist_data -> send_data(DHandle, Socket);
-        tick -> ok = gen_tcp:send(Socket, <<>>)
     end,
-    output(DHandle, Socket).
+    loop(DHandle, Socket).
 
 send_data(DHandle, Socket) ->
     case erlang:dist_ctrl_get_data(DHandle) of
@@ -124,26 +106,9 @@ send_data(DHandle, Socket) ->
     end.
 
 getstat(Socket) ->
-    case inet:getstat(Socket, [recv_cnt, send_cnt, send_pend]) of
-        {ok, Stats} ->
-            {ok, proplists:get_value(recv_cnt, Stats), proplists:get_value(send_cnt, Stats),
-             proplists:get_value(send_pend, Stats)};
-        Error ->
-            Error
-    end.
-
-call(Ctrl, Request) ->
-    Ref = erlang:monitor(process, Ctrl),
-    Ctrl ! {Ref, self(), Request},
-    receive
-        {Ref, Result} ->
-            erlang:demonitor(Ref, [flush]),
-            Result;
-        {'DOWN', Ref, process, Ctrl, Reason} ->
-            exit({dist_controller_exit, Reason})
-    end.
-
-reply(From, Ref, Result) -> From ! {Ref, Result}.
+    {ok, Stats} = inet:getstat(Socket, [recv_cnt, send_cnt, send_pend]),
+    [R, W, P] = [proplists:get_value(K, Stats) || K <- [recv_cnt, send_cnt, send_pend]],
+    {ok, R, W, P}.
 
 address() -> inet_tcp_dist:gen_address(?MODULE).
 close(Socket) -> inet_tcp:close(Socket).
