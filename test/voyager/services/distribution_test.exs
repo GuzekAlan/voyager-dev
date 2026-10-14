@@ -34,6 +34,14 @@ defmodule Voyager.Services.DistributionTest do
       on_exit(fn -> if Node.alive?(), do: :net_kernel.stop() end)
     end
 
+    test "refuses to start without the filtering carrier" do
+      Application.put_env(:voyager, :unfiltered_distribution, false)
+      on_exit(fn -> Application.put_env(:voyager, :unfiltered_distribution, true) end)
+
+      assert Distribution.ensure_distributed(:longnames) == {:error, :unfiltered_distribution}
+      refute Node.alive?()
+    end
+
     test "starts distribution with a :longnames node pinned to 127.0.0.1" do
       assert :ok = Distribution.ensure_distributed(:longnames)
 

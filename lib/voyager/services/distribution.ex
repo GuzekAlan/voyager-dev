@@ -23,6 +23,9 @@ defmodule Voyager.Services.Distribution do
   @spec ensure_distributed(atom()) :: :ok | {:error, term()}
   def ensure_distributed(name_type) when name_type in [:longnames, :shortnames] do
     cond do
+      not filtered?() ->
+        {:error, :unfiltered_distribution}
+
       not Node.alive?() ->
         start_distribution(name_type)
 
@@ -68,6 +71,12 @@ defmodule Voyager.Services.Distribution do
       {:ok, address} -> address
       {:error, _} -> charlist
     end
+  end
+
+  # Only dual_tcp_dist drops what the remote node may not send; any other carrier lets it run code here.
+  defp filtered? do
+    :init.get_argument(:proto_dist) == {:ok, [[~c"dual_tcp"]]} or
+      Application.get_env(:voyager, :unfiltered_distribution, false)
   end
 
   defp distribution_name do
