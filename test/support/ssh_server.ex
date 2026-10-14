@@ -48,15 +48,13 @@ defmodule Voyager.Test.SshServer do
     end)
 
     {:ok, info} = :ssh.daemon_info(daemon)
-    %{port: Keyword.fetch!(info, :port), daemon: daemon, host_key: public_key(host_key)}
+
+    %{
+      port: Keyword.fetch!(info, :port),
+      daemon: daemon,
+      host_key: :ssh_file.extract_public_key(host_key)
+    }
   end
-
-  @spec public_key(:public_key.private_key()) :: :public_key.public_key()
-  def public_key({:ECPrivateKey, _version, _private, params, public, _attrs}),
-    do: {{:ECPoint, public}, params}
-
-  def public_key({:RSAPrivateKey, _version, modulus, exponent, _, _, _, _, _, _, _}),
-    do: {:RSAPublicKey, modulus, exponent}
 
   @impl true
   def host_key(_algorithm, opts), do: {:ok, opts[:key_cb_private][:host_key]}

@@ -25,7 +25,7 @@ defmodule Voyager.Test.SshServerTest do
     key = :public_key.generate_key({:namedCurve, :ed25519})
     pem = :public_key.pem_encode([:public_key.pem_entry_encode(:ECPrivateKey, key)])
     File.write!(Path.join(dir, "id_ed25519"), pem)
-    SshServer.public_key(key)
+    :ssh_file.extract_public_key(key)
   end
 
   @tag :tmp_dir

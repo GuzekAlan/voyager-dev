@@ -1,12 +1,15 @@
 defmodule Voyager.Services.RemoteNodeConnectorSshTest do
-  # async: false because connecting starts distribution for the whole VM.
   use Voyager.DataCase,
     async: false,
     parameterize:
       for(
         ssh_host <- ["127.0.0.1", "::1"],
-        node_host <- ["127.0.0.1", "::1"],
-        do: %{ssh_host: ssh_host, node_host: node_host}
+        {node_host, node_listen} <- [
+          {"127.0.0.1", :ipv4},
+          {"::1", :dual_stack},
+          {"::1", :ipv6_only}
+        ],
+        do: %{ssh_host: ssh_host, node_host: node_host, node_listen: node_listen}
       )
 
   alias Voyager.ProxyEpmd.TunnelRegistry
@@ -25,7 +28,9 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
       )
     end
 
-    :ok
+    previous_tcp_module = :inet_db.tcp_module()
+    :inet_db.set_tcp_module(Voyager.Test.DualTcp)
+    on_exit(fn -> :inet_db.set_tcp_module(previous_tcp_module) end)
   end
 
   setup ctx do
@@ -33,7 +38,6 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
     %{port: ssh_port, daemon: daemon} = SshServer.start!(ssh_address)
     peer_name = "voyager_ssh_peer_#{System.unique_integer([:positive])}"
 
-    # standard_io keeps the peer off distribution, so only Voyager's tunnel can connect to it.
     {:ok, peer, peer_node} =
       :peer.start(%{
         name: String.to_atom(peer_name),
@@ -47,7 +51,7 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
             ~c"-kernel",
             ~c"logger_level",
             ~c"none"
-          ] ++ proto_dist_args(ctx.node_host)
+          ] ++ listen_args(ctx.node_listen)
       })
 
     on_exit(fn ->
@@ -58,9 +62,13 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
     %{ssh_port: ssh_port, daemon: daemon, peer_name: peer_name, peer_node: peer_node}
   end
 
-  # inet6_tcp listens on ::, so the IPv6-named peer is reachable over both stacks.
-  defp proto_dist_args("::1"), do: [~c"-proto_dist", ~c"inet6_tcp"]
-  defp proto_dist_args(_ipv4), do: []
+  defp listen_args(:ipv4), do: []
+  defp listen_args(:dual_stack), do: [~c"-proto_dist", ~c"inet6_tcp"]
+
+  defp listen_args(:ipv6_only),
+    do:
+      listen_args(:dual_stack) ++
+        [~c"-kernel", ~c"inet_dist_use_interface", ~c"{0,0,0,0,0,0,0,1}"]
 
   defp connect(ctx, overrides \\ []) do
     RemoteNodeConnector.connect(
