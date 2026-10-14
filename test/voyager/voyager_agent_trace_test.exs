@@ -170,6 +170,9 @@ defmodule VoyagerAgentTraceTest do
     assert {:error, {:invalid_match_spec, [_ | _]}} =
              start(spec(match_spec: [{:_, [{:no_such_guard, :"$1"}], []}]), @limits)
 
+    assert {:error, {:invalid_match_spec, [_ | _]}} =
+             start(spec(match_spec: [{:_, [], [{:no_such_action, 1}]}]), @limits)
+
     assert {:error, {:invalid, :match_spec}} =
              start(spec(match_spec: List.duplicate({:_, [], []}, 11)), @limits)
   end

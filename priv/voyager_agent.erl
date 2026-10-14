@@ -863,7 +863,9 @@ trace_match_spec(MatchSpec, ReturnTrace) ->
     maybe
         false ?= refused_action([{Guards, Body} || {_Head, Guards, Body} <- MatchSpec],
                                 refused_actions(ReturnTrace)),
-        {ok, _, _, _} ?= erlang:match_spec_test([], MatchSpec, trace),
+        %% `match_spec_test' runs the body here (`enable_trace' segfaults); `false' keeps it compile-only.
+        {ok, _, _, _} ?=
+            erlang:match_spec_test([], [{H, [false | G], B} || {H, G, B} <- MatchSpec], trace),
         {ok,
          [{Head, Guards, Body ++ return_body(ReturnTrace)} || {Head, Guards, Body} <- MatchSpec]}
     else
