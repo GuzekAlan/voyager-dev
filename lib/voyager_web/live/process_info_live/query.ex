@@ -50,10 +50,10 @@ defmodule VoyagerWeb.ProcessInfoLive.Query do
   end
 
   def resolve_pid(node, pid_string) do
-    case Voyager.Pid.parse(pid_string) do
-      pid when is_pid(pid) and node(pid) == node -> {:ok, pid}
-      _other -> {:error, :invalid_pid}
-    end
+    pid = :erlang.list_to_pid(String.to_charlist(pid_string))
+    if node(pid) == node, do: {:ok, pid}, else: {:error, :invalid_pid}
+  rescue
+    ArgumentError -> {:error, :invalid_pid}
   end
 
   @spec overview(node(), pid(), timeout()) :: {:ok, map(), non_neg_integer()} | {:error, term()}

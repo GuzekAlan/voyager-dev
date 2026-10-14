@@ -1,6 +1,6 @@
 defmodule Voyager.Services.RemoteNodeConnector do
   @moduledoc """
-  Connects to a remote Erlang node via SSH using Erlang's built-in `:ssh`.
+  Connects to a remote Erlang node via SSH using `Voyager.Services.SSH`.
 
   Ensures the local node is distributed, opens an SSH connection to the gateway
   host, discovers the target node's distribution port by querying the remote
@@ -46,13 +46,12 @@ defmodule Voyager.Services.RemoteNodeConnector do
   import Voyager.ProxyEpmd.Guard
 
   alias Voyager.ProxyEpmd.TunnelRegistry
-  alias Voyager.Services.DistClient
   alias Voyager.Services.Distribution
-  alias Voyager.Services.Erlssh.Auth
-  alias Voyager.Services.Erlssh.Connection
+  alias Voyager.Services.EpmdClient
+  alias Voyager.Services.SSH
   alias Voyager.Validate
 
-  require Auth
+  require SSH
 
   @doc """
   Establishes an SSH connection and sets up a local TCP tunnel to the remote node.
@@ -69,12 +68,11 @@ defmodule Voyager.Services.RemoteNodeConnector do
       Voyager.Services.RemoteNodeConnector.connect("voyager", "1.2.3.4", "test@10.0.0.5", "cookie", {:password, "secret"}, ssh_port: 2222)
       #=> {:ok, :"test@10.0.0.5", conn_ref, 54322}
   """
-  @spec connect(String.t(), String.t(), String.t(), String.t(), Auth.auth(), keyword()) ::
-          {:ok, remote_node :: node(), conn_ref :: :ssh.connection_ref(),
-           local_port :: pos_integer()}
+  @spec connect(String.t(), String.t(), String.t(), String.t(), SSH.auth(), keyword()) ::
+          {:ok, remote_node :: node(), conn_ref :: SSH.conn(), local_port :: pos_integer()}
           | {:error, reason :: term()}
   def connect(ssh_user, ssh_host, full_node_name, cookie, auth, opts \\ [])
-      when Auth.is_ssh_auth(auth) do
+      when SSH.is_ssh_auth(auth) do
     require_epmd do
       epmd_port = Keyword.get(opts, :epmd_port, 4369)
       ssh_port = Keyword.get(opts, :ssh_port, 22)
@@ -84,17 +82,17 @@ defmodule Voyager.Services.RemoteNodeConnector do
            {:ok, node_name, node_host} <- Distribution.split_node_name(full_node_name),
            :ok <- Validate.host(node_host),
            :ok <- Validate.host(ssh_host),
-           {:ok, conn_ref} <- Connection.connect_ssh(ssh_host, ssh_port, ssh_user, auth) do
+           {:ok, conn_ref} <- SSH.connect(ssh_host, ssh_port, ssh_user, auth) do
         establish(conn_ref, full_node_name, node_name, node_host, name_type, cookie, epmd_port)
       end
     end
   end
 
-  @spec stop(:ssh.connection_ref()) :: :ok
+  @spec stop(SSH.conn()) :: :ok
   def stop(conn_ref) when is_pid(conn_ref) do
     require_epmd do
       TunnelRegistry.unregister_by_tunnel(conn_ref)
-      :ssh.close(conn_ref)
+      SSH.close(conn_ref)
     end
   end
 
@@ -102,63 +100,40 @@ defmodule Voyager.Services.RemoteNodeConnector do
     node_key = String.to_charlist(node_name)
     remote_node = String.to_atom(full_node_name)
 
-    remote_hosts = Enum.uniq([~c"127.0.0.1", String.to_charlist(node_host)])
+    remote_hosts = Enum.uniq(["127.0.0.1", node_host])
 
-    connect = connect_fun(remote_node, cookie, name_type)
-
-    with :ok <- ensure_distributed(name_type),
+    with :ok <- Distribution.ensure_distributed(name_type),
          {:ok, local_port} <-
-           connect_through(remote_hosts, conn_ref, node_name, connect, epmd_port) do
+           connect_through(remote_hosts, conn_ref, node_name, remote_node, cookie, epmd_port) do
       {:ok, remote_node, conn_ref, local_port}
     else
       {:error, _} = err ->
-        :ssh.close(conn_ref)
+        SSH.close(conn_ref)
         TunnelRegistry.unregister(node_key)
         err
     end
   end
 
-  defp connect_through(remote_hosts, conn_ref, node_name, connect, epmd_port) do
+  defp connect_through(remote_hosts, conn_ref, node_name, remote_node, cookie, epmd_port) do
     Enum.reduce_while(remote_hosts, nil, fn remote_host, first_error ->
-      case connect_via(remote_host, conn_ref, node_name, connect, epmd_port) do
+      case connect_via(remote_host, conn_ref, node_name, remote_node, cookie, epmd_port) do
         {:ok, _local_port} = ok -> {:halt, ok}
         error -> {:cont, first_error || error}
       end
     end)
   end
 
-  defp connect_via(remote_host, conn_ref, node_name, connect, epmd_port) do
+  defp connect_via(remote_host, conn_ref, node_name, remote_node, cookie, epmd_port) do
     node_key = String.to_charlist(node_name)
 
-    with {:ok, dist_port} <-
-           Connection.discover_dist_port(conn_ref, remote_host, node_name, epmd_port),
-         {:ok, local_port} <- Connection.open_tunnel(conn_ref, remote_host, dist_port),
-         :ok <- TunnelRegistry.register(node_key, local_port, conn_ref),
-         :ok <- connect.(local_port) do
-      {:ok, local_port}
-    end
-  end
-
-  defp ensure_distributed(name_type) do
-    if DistClient.enabled?(), do: :ok, else: Distribution.ensure_distributed(name_type)
-  end
-
-  defp connect_fun(remote_node, cookie, name_type) do
-    if DistClient.enabled?(),
-      do: &start_client(remote_node, cookie, name_type, &1),
-      else: fn _local_port -> connect_distribution(remote_node, cookie) end
-  end
-
-  defp start_client(remote_node, cookie, name_type, local_port) do
-    opts = [node: remote_node, address: {127, 0, 0, 1}, port: local_port, cookie: cookie]
-    with {:ok, _client} <- DistClient.start([name_type: name_type] ++ opts), do: :ok
-  end
-
-  defp connect_distribution(remote_node, cookie) do
-    case connect_node(remote_node, cookie) do
-      true -> :ok
-      false -> {:error, :node_connect_failed}
-      :ignored -> {:error, :not_distributed}
+    with {:ok, dist_port} <- discover_dist_port(conn_ref, remote_host, node_name, epmd_port),
+         {:ok, local_port} <- SSH.open_tunnel(conn_ref, remote_host, dist_port),
+         :ok <- TunnelRegistry.register(node_key, local_port, conn_ref) do
+      case connect_node(remote_node, cookie) do
+        true -> {:ok, local_port}
+        false -> {:error, :node_connect_failed}
+        :ignored -> {:error, :not_distributed}
+      end
     end
   end
 
@@ -167,5 +142,11 @@ defmodule Voyager.Services.RemoteNodeConnector do
     result = Node.connect(remote_node)
     :erlang.set_cookie(remote_node, :nocookie)
     result
+  end
+
+  defp discover_dist_port(conn_ref, remote_host, node_name, epmd_port) do
+    with {:ok, epmd_local_port} <- SSH.open_tunnel(conn_ref, remote_host, epmd_port) do
+      EpmdClient.node_port(epmd_local_port, node_name)
+    end
   end
 end

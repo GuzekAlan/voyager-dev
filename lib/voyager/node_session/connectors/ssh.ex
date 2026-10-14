@@ -7,7 +7,6 @@ defmodule Voyager.NodeSession.Connectors.Ssh do
   @behaviour Voyager.NodeSession.Connector
 
   alias Voyager.ProxyEpmd.TunnelRegistry
-  alias Voyager.Services.DistClient
   alias Voyager.Services.RemoteNodeConnector
 
   @impl true
@@ -26,8 +25,7 @@ defmodule Voyager.NodeSession.Connectors.Ssh do
             conn_ref: conn_ref,
             local_port: local_port,
             ssh_user: ssh_user,
-            ssh_host: ssh_host,
-            client_monitor: monitor_client(node)
+            ssh_host: ssh_host
           }
 
           {:ok, node, meta}
@@ -46,21 +44,12 @@ defmodule Voyager.NodeSession.Connectors.Ssh do
   end
 
   @impl true
-  def disconnect(node, %{conn_ref: conn_ref}) do
-    if client = DistClient.whereis(node), do: DistClient.stop(client)
-    RemoteNodeConnector.stop(conn_ref)
-  end
+  def disconnect(_node, %{conn_ref: conn_ref}), do: RemoteNodeConnector.stop(conn_ref)
 
   @impl true
   def subscriptions, do: [TunnelRegistry.topic()]
 
   @impl true
   def teardown?({:tunnel_down, conn_ref}, %{conn_ref: conn_ref}), do: true
-  def teardown?({:DOWN, ref, :process, _pid, _reason}, %{client_monitor: ref}), do: true
   def teardown?(_msg, _meta), do: false
-
-  defp monitor_client(node) do
-    client = DistClient.whereis(node)
-    client && Process.monitor(client)
-  end
 end

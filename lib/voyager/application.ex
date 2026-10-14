@@ -18,8 +18,6 @@ defmodule Voyager.Application do
       {Phoenix.PubSub, name: Voyager.PubSub},
       {Task.Supervisor, name: Voyager.TaskSupervisor},
       Voyager.ProxyEpmd.TunnelRegistry,
-      {Registry, keys: :unique, name: Voyager.Services.DistClient.Registry},
-      {DynamicSupervisor, name: Voyager.Services.DistClient.Supervisor},
       Voyager.NodeSession,
       {ElixirKit.PubSub, connect: elixirkit_pubsub || :ignore, on_exit: fn -> System.stop() end},
       {Voyager.Services.RateLimiter,

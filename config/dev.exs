@@ -41,5 +41,3 @@ config :phoenix_live_view,
 
 config :live_debugger, debug_button: false
 config :live_debugger, auto_port: true
-
-config :voyager, erpc: Voyager.Erpc.Socket

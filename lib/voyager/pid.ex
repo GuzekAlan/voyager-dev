@@ -6,18 +6,17 @@ defmodule Voyager.Pid do
   """
 
   alias Voyager.Erpc
-  alias Voyager.Services.DistClient.Frame
   alias Voyager.Settings
 
   @format_key {__MODULE__, :format}
   @node_id_key {__MODULE__, :node_id}
-  @connected_key {__MODULE__, :connected}
   @formats [:distribution, :local]
 
   @spec parse(String.t()) :: pid() | nil
   def parse(pid_str) when is_binary(pid_str) do
-    pid_str = String.trim_leading(pid_str, "#PID")
-    list_to_pid(pid_str) || parse_connected(pid_str)
+    pid_str |> String.trim_leading("#PID") |> String.to_charlist() |> :erlang.list_to_pid()
+  rescue
+    ArgumentError -> nil
   end
 
   @doc "The `N` of the connected node's `<N.X.Y>` pids, cached by `put_node/1`."
@@ -25,16 +24,8 @@ defmodule Voyager.Pid do
   def cached_node_id, do: :persistent_term.get(@node_id_key, nil)
 
   @spec put_node(node() | nil) :: :ok
-  def put_node(nil) do
-    :persistent_term.put(@connected_key, nil)
-    :persistent_term.put(@node_id_key, nil)
-  end
-
-  def put_node(node) do
-    pid = node_pid(node)
-    :persistent_term.put(@connected_key, pid && {Atom.to_string(node), creation(pid)})
-    :persistent_term.put(@node_id_key, pid && node_id(pid))
-  end
+  def put_node(nil), do: :persistent_term.put(@node_id_key, nil)
+  def put_node(node), do: :persistent_term.put(@node_id_key, node_id(node))
 
   @doc """
   The display format cached by `load_format/0` or `put_format/1`;
@@ -79,40 +70,16 @@ defmodule Voyager.Pid do
   def inspect_fun(pid, _opts) when is_pid(pid), do: "#PID" <> format(pid)
   def inspect_fun(term, opts), do: Inspect.inspect(term, opts)
 
-  defp list_to_pid(pid_str) do
-    :erlang.list_to_pid(String.to_charlist(pid_str))
-  rescue
-    ArgumentError -> nil
-  end
-
   # Any pid of the node, printed here, carries the `N` this node gives it.
-  defp node_pid(node) do
+  defp node_id(node) do
     case Erpc.safe_call(node, :erlang, :self, []) do
-      {:ok, pid} when is_pid(pid) -> pid
-      _error -> nil
+      {:ok, pid} when is_pid(pid) ->
+        [_prefix, id] = Regex.run(~r/^<(\d+)\./, format(pid, :distribution))
+        id
+
+      _error ->
+        nil
     end
-  end
-
-  defp node_id(pid) do
-    [_prefix, id] = Regex.run(~r/^<(\d+)\./, format(pid, :distribution))
-    id
-  end
-
-  # Without distribution `list_to_pid/1` rejects remote pids.
-  defp parse_connected(pid_str) do
-    with {name, creation} <- :persistent_term.get(@connected_key, nil),
-         [_, id, number, serial] <- Regex.run(~r/^<(\d+)\.(\d+)\.(\d+)>$/, pid_str),
-         [number, serial] = Enum.map([number, serial], &String.to_integer/1),
-         true <- id == cached_node_id() and number < 0x100000000 and serial < 0x100000000 do
-      Frame.pid(name, creation, number, serial)
-    else
-      _ -> nil
-    end
-  end
-
-  defp creation(pid) do
-    bin = :erlang.term_to_binary(pid)
-    :binary.decode_unsigned(binary_part(bin, byte_size(bin), -4))
   end
 
   defp normalize_format(format) when format in @formats, do: format

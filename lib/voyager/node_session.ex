@@ -7,8 +7,6 @@ defmodule Voyager.NodeSession do
 
   alias Voyager.Agent
   alias Voyager.NodeSession.Connectors.Distribution
-  alias Voyager.NodeSession.Connectors.Socket
-  alias Voyager.Services.DistClient
 
   @default_connector Distribution
 
@@ -37,11 +35,10 @@ defmodule Voyager.NodeSession do
     :persistent_term.get(@connector_name_cache_key, nil)
   end
 
-  @doc "Connects directly, through `Connectors.Socket` when `DistClient.enabled?/0`."
+  @doc "Connects via the default distribution connector."
   @spec connect(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def connect(node_name, cookie, opts \\ []) do
-    connector = if DistClient.enabled?(), do: Socket, else: @default_connector
-    connect_via(connector, node_name, cookie, opts)
+    connect_via(@default_connector, node_name, cookie, opts)
   end
 
   @doc "Connects using an explicit `Voyager.NodeSession.Connector` module."
@@ -171,7 +168,6 @@ defmodule Voyager.NodeSession do
 
   def handle_info(msg, %{session: %Session{connector: connector, meta: meta} = session} = state) do
     if connector.teardown?(msg, meta) do
-      connector.disconnect(session.node, meta)
       new_state = drop_session(state, session, :nodedown, "transport down", :transport_down)
       {:noreply, new_state}
     else
@@ -206,7 +202,7 @@ defmodule Voyager.NodeSession do
   # usable session, so a failed install fails the whole connect.
   defp connect_and_install(connector, node_name, cookie, opts) do
     with {:ok, node, meta} <- safe_connect(connector, node_name, cookie, opts) do
-      case safe_install(node) do
+      case Agent.install(node) do
         :ok ->
           {:ok, node, meta}
 
@@ -215,14 +211,6 @@ defmodule Voyager.NodeSession do
           error
       end
     end
-  end
-
-  defp safe_install(node) do
-    Agent.install(node)
-  rescue
-    error -> {:error, {:agent_install_failed, error}}
-  catch
-    kind, reason -> {:error, {:agent_install_failed, {kind, reason}}}
   end
 
   defp safe_connect(connector, node_name, cookie, opts) do
