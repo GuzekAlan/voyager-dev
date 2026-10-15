@@ -16,8 +16,14 @@
 %% Without the header atom cache and fragments every frame is <<112, ControlTerm, Payload>>.
 -define(REJECT_FLAGS, (?DFLAG_DIST_HDR_ATOM_CACHE bor ?DFLAG_FRAGMENTS)).
 
-%% Replies to our own erpc calls: MONITOR_P_EXIT, PAYLOAD_MONITOR_P_EXIT, SPAWN_REPLY, SPAWN_REPLY_TT.
--define(ALLOWED_OPS, [21, 28, 31, 32]).
+%% Replies to our own erpc calls: MONITOR_P_EXIT and PAYLOAD_MONITOR_P_EXIT.
+-define(ALLOWED_OPS, [21, 28]).
+%% Nothing here sets seq_trace, so SPAWN_REPLY_TT (32) is never expected.
+-define(SPAWN_REPLY, 31).
+%% The VM links the caller to the replied pid whenever the reply carries this flag, even for a request without link.
+-define(SPAWN_FLAG_LINK, 1).
+%% Three terms with node-name atoms: a real reply stays far below this, a payload-sized one is not decoded twice.
+-define(SPAWN_REPLY_MAX_BYTES, 4096).
 
 select(Node) -> inet_tcp_dist:fam_select(inet, Node) orelse inet_tcp_dist:fam_select(inet6, Node).
 
@@ -40,7 +46,7 @@ do_setup(Kernel, Driver, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
     dist_util:reset_timer(Timer),
     case Driver:connect(Ip, Port, Options) of
         {ok, Socket} ->
-            Ctrl = spawn_link(fun() -> connection(Socket) end),
+            Ctrl = spawn_opt(fun() -> connection(Socket) end, [link, {priority, max}]),
             dist_util:handshake_we_started(
               #hs_data{kernel_pid = Kernel,
                        other_node = Node,
@@ -73,8 +79,22 @@ do_setup(Kernel, Driver, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
 
 -spec allowed(binary()) -> boolean().
 allowed(<<>>) -> true;
+allowed(<<112, 131, 104, _Arity, 97, ?SPAWN_REPLY, _/binary>> = Frame)
+  when byte_size(Frame) =< ?SPAWN_REPLY_MAX_BYTES ->
+    unlinked_spawn_reply(Frame);
 allowed(<<112, 131, 104, _Arity, 97, Op, _/binary>>) -> lists:member(Op, ?ALLOWED_OPS);
 allowed(_) -> false.
+
+unlinked_spawn_reply(<<112, Control/binary>>) ->
+    try binary_to_term(Control, [safe, used]) of
+        {{?SPAWN_REPLY, _Ref, _To, Flags, _Result}, Used}
+          when is_integer(Flags), Used =:= byte_size(Control) ->
+            Flags band ?SPAWN_FLAG_LINK =:= 0;
+        _ ->
+            false
+    catch
+        _:_ -> false
+    end.
 
 connection(Socket) ->
     receive {handshake_complete, DHandle} -> ok end,

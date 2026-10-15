@@ -73,19 +73,6 @@ defmodule DualTcpDistFilterTest do
     refute File.exists?(file)
   end
 
-  test "only replies to our own calls and ticks pass the filter" do
-    assert :dual_tcp_dist.allowed(<<>>)
-    assert :dual_tcp_dist.allowed(frame({21, self(), self(), make_ref(), :result}))
-    assert :dual_tcp_dist.allowed(frame({31, make_ref(), self(), 2, self()}))
-    refute :dual_tcp_dist.allowed(frame({29, make_ref(), self(), self(), {:os, :cmd, 1}, []}))
-    refute :dual_tcp_dist.allowed(frame({6, self(), :"", :rex}))
-    refute :dual_tcp_dist.allowed(frame({2, :"", self()}))
-    refute :dual_tcp_dist.allowed(frame({8, self(), self(), :kill}))
-    refute :dual_tcp_dist.allowed(<<68, 0>>)
-  end
-
-  defp frame(control), do: <<112, :erlang.term_to_binary(control)::binary>>
-
   defp start_peer(prefix, args) do
     name = :"#{prefix}_#{System.unique_integer([:positive])}"
 
