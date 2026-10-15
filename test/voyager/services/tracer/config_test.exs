@@ -68,16 +68,6 @@ defmodule Voyager.Services.Tracer.ConfigTest do
     assert %{module: [_]} = errors(%{@valid | module: Atom.to_string(Voyager.Agent.module())})
   end
 
-  test "refuses every module the agent refuses on all processes" do
-    [_, hot] =
-      Regex.run(~r/-define\(TRACE_HOT,(.*?)\]\)\./s, File.read!("priv/voyager_agent.erl"))
-
-    for [_, module] <- Regex.scan(~r/'?([A-Za-z_.]+)'?/, hot) do
-      assert %{module: [_]} = errors(Map.merge(@valid, %{module: module, processes: :all})),
-             module
-    end
-  end
-
   defp apply_attrs(attrs),
     do: attrs |> Config.changeset() |> Ecto.Changeset.apply_action(:validate)
 

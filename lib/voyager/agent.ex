@@ -8,6 +8,7 @@ defmodule Voyager.Agent do
   alias Voyager.Erpc
   alias Voyager.NodeSession
   alias Voyager.Services.CodeInjector
+  alias Voyager.Services.Tracer.Config
 
   @agent_source "voyager_agent.erl"
   @agent_path Path.expand("../../priv/#{@agent_source}", __DIR__)
@@ -59,6 +60,10 @@ defmodule Voyager.Agent do
   """
   @spec module() :: module()
   def module, do: @agent
+
+  @doc "The macros the agent source is compiled with."
+  @spec macros() :: keyword()
+  def macros, do: [{:AGENT, @agent} | Config.agent_macros()]
 
   @doc "Minimum OTP release the agent requires on the remote node."
   @spec min_otp() :: pos_integer()
@@ -127,7 +132,7 @@ defmodule Voyager.Agent do
   defp ensure_loaded(node) do
     case Erpc.safe_call(node, :code, :is_loaded, [@agent], @remote_timeout) do
       {:ok, false} ->
-        CodeInjector.load(node, Path.join(:code.priv_dir(:voyager), @agent_source), AGENT: @agent)
+        CodeInjector.load(node, Path.join(:code.priv_dir(:voyager), @agent_source), macros())
 
       {:ok, _loaded} ->
         {:ok, @agent}
