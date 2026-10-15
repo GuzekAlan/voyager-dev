@@ -149,7 +149,6 @@ defmodule Voyager.Telemetry.ParserTest do
         scope: :global,
         return_trace: true,
         processes: :pids,
-        match_spec?: false,
         module: "Elixir.Secret"
       }
 

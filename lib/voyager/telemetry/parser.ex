@@ -126,7 +126,7 @@ defmodule Voyager.Telemetry.Parser do
   def parse_metadata([:voyager, :mcp, :stop], meta), do: %{reason: meta[:reason]}
 
   def parse_metadata([:voyager, :trace, :start], meta) do
-    Map.take(meta, [:origin, :capture, :scope, :return_trace, :processes, :match_spec?])
+    Map.take(meta, [:origin, :capture, :scope, :return_trace, :processes])
   end
 
   def parse_metadata([:voyager, :trace, event], meta) when event in [:start_failed, :stop] do

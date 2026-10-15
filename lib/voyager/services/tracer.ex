@@ -2,34 +2,37 @@ defmodule Voyager.Services.Tracer do
   @moduledoc """
   Owns the single tracing session of this Voyager instance; the UI and MCP both go through it.
 
-  The tracer on the remote node pushes event batches straight to this process.
-  The newest events are kept in memory and everything is broadcast on `topic/0`
-  as `{:tracing_started, session}`, `{:trace_events, session, events}` and
-  `{:tracing_ended, session}`.
+  A session is configured once, then switched on and off with `start/0` and
+  `stop/1`; starting a stopped session resumes it. The tracer on the remote node
+  pushes event batches straight to this process. The newest events are kept in
+  memory and everything is broadcast on `topic/0` as
+  `{:tracing_configured, session}`, `{:tracing_started, session}`,
+  `{:trace_events, session, events}` and `{:tracing_ended, session}`.
   """
 
   use GenServer
 
   alias Voyager.Agent
+  alias Voyager.Services.Tracer.Config
 
   @topic "tracing"
   @kept_events 500
   @max_mailbox 1_000
+  @call_timeout Agent.default_timeout() + 1_000
 
   @type origin :: :ui | :mcp
 
   @type session :: %{
           id: pos_integer(),
           node: node(),
-          spec: map(),
-          limits: map(),
+          config: Config.t(),
           origin: origin(),
-          tracer: pid(),
-          status: :running | :ended,
+          tracer: pid() | nil,
+          status: :configured | :running | :stopped,
           stop_reason: term(),
           events: non_neg_integer(),
           dropped: non_neg_integer(),
-          started_at: DateTime.t(),
+          started_at: DateTime.t() | nil,
           ended_at: DateTime.t() | nil
         }
 
@@ -40,76 +43,107 @@ defmodule Voyager.Services.Tracer do
   def topic, do: @topic
 
   @doc """
-  Starts tracing on `node` with the agent's `spec` and `limits`, which the agent validates.
-  Returns `{:error, :busy}` while another session runs.
+  Replaces the session with a new one tracing `node` with `attrs` (see `Config`).
+  Returns `{:error, :busy}` while a session runs.
   """
-  @spec start(node(), map(), map(), origin()) :: {:ok, session()} | {:error, term()}
-  def start(node, spec, limits, origin) when origin in [:ui, :mcp] do
-    GenServer.call(
-      __MODULE__,
-      {:start, node, spec, limits, origin},
-      Agent.default_timeout() + 1_000
-    )
-  end
+  @spec configure(node(), map(), origin()) ::
+          {:ok, session()} | {:error, :busy | Ecto.Changeset.t()}
+  def configure(node, attrs, origin) when origin in [:ui, :mcp],
+    do: GenServer.call(__MODULE__, {:configure, node, attrs, origin})
+
+  @doc "Starts or resumes the configured session; the agent's refusals come back as `{:error, reason}`."
+  @spec start() :: {:ok, session()} | {:error, term()}
+  def start, do: GenServer.call(__MODULE__, :start, @call_timeout)
 
   @doc """
   Asks the remote tracer to stop; `tracing_ended` follows with `reason`.
   Stops any session, whoever started it.
   """
   @spec stop(term()) :: :ok
-  def stop(reason \\ :stopped),
-    do: GenServer.call(__MODULE__, {:stop, reason}, Agent.default_timeout() + 1_000)
+  def stop(reason \\ :stopped), do: GenServer.call(__MODULE__, {:stop, reason}, @call_timeout)
 
-  @doc "The running or last session and its kept events, newest first."
+  @doc "The session and its kept events, newest first."
   @spec current() :: {session() | nil, [map()]}
   def current, do: GenServer.call(__MODULE__, :current)
 
   @impl true
-  def init(nil), do: {:ok, %{session: nil, events: [], dropped_here: 0, stopping: nil}}
+  def init(nil), do: {:ok, %{session: nil, events: [], dropped_here: 0, stopping: nil, run: nil}}
 
   @impl true
   def handle_call(
-        {:start, _node, _spec, _limits, _origin},
+        {:configure, _node, _attrs, _origin},
         _from,
         %{session: %{status: :running}} = state
       ) do
     {:reply, {:error, :busy}, state}
   end
 
-  def handle_call({:start, node, spec, limits, origin}, _from, state) do
-    case Agent.call(node, :trace_start, [self(), spec, limits], Agent.default_timeout()) do
+  def handle_call({:configure, node, attrs, origin}, _from, state) do
+    case attrs |> Config.changeset() |> Ecto.Changeset.apply_action(:validate) do
+      {:ok, config} ->
+        session = %{
+          id: System.unique_integer([:positive]),
+          node: node,
+          config: config,
+          origin: origin,
+          tracer: nil,
+          status: :configured,
+          stop_reason: nil,
+          events: 0,
+          dropped: 0,
+          started_at: nil,
+          ended_at: nil
+        }
+
+        broadcast({:tracing_configured, session})
+        {:reply, {:ok, session}, %{state | session: session, events: []}}
+
+      {:error, changeset} ->
+        {:reply, {:error, changeset}, state}
+    end
+  end
+
+  def handle_call(:start, _from, %{session: nil} = state),
+    do: {:reply, {:error, :not_configured}, state}
+
+  def handle_call(:start, _from, %{session: %{status: :running}} = state),
+    do: {:reply, {:error, :busy}, state}
+
+  def handle_call(:start, _from, %{session: session} = state) do
+    {spec, limits} = Config.to_agent(session.config)
+
+    case Agent.call(session.node, :trace_start, [self(), spec, limits], Agent.default_timeout()) do
       {:ok, {:ok, tracer}} ->
         Process.monitor(tracer)
 
         session = %{
-          id: System.unique_integer([:positive]),
-          node: node,
-          spec: spec,
-          limits: limits,
-          origin: origin,
-          tracer: tracer,
-          status: :running,
-          stop_reason: nil,
-          events: 0,
-          dropped: 0,
-          started_at: DateTime.utc_now(),
-          ended_at: nil
+          session
+          | tracer: tracer,
+            status: :running,
+            stop_reason: nil,
+            started_at: session.started_at || DateTime.utc_now(),
+            ended_at: nil
         }
 
         broadcast({:tracing_started, session})
 
         Voyager.Telemetry.dispatch!("voyager.trace.start",
-          metadata: Map.put(spec_metadata(spec), :origin, origin)
+          metadata:
+            session.config
+            |> Map.take([:capture, :scope, :return_trace, :processes])
+            |> Map.put(:origin, session.origin)
         )
 
+        run = %{events: session.events, dropped: session.dropped, at: System.monotonic_time()}
+
         {:reply, {:ok, session},
-         %{state | session: session, events: [], dropped_here: 0, stopping: nil}}
+         %{state | session: session, dropped_here: 0, stopping: nil, run: run}}
 
       {:ok, {:error, reason}} ->
-        start_failed(reason, origin, state)
+        start_failed(reason, state)
 
       {:error, reason} ->
-        start_failed(reason, origin, state)
+        start_failed(reason, state)
     end
   end
 
@@ -130,7 +164,7 @@ defmodule Voyager.Services.Tracer do
       ) do
     if overloaded?() do
       dropped_here = state.dropped_here + length(events)
-      session = %{session | dropped: dropped + dropped_here}
+      session = %{session | dropped: state.run.dropped + dropped + dropped_here}
       {:noreply, %{state | session: session, dropped_here: dropped_here}}
     else
       events = Enum.with_index(events, fn event, i -> Map.put(event, :id, session.events + i) end)
@@ -138,7 +172,7 @@ defmodule Voyager.Services.Tracer do
       session = %{
         session
         | events: session.events + length(events),
-          dropped: dropped + state.dropped_here
+          dropped: state.run.dropped + dropped + state.dropped_here
       }
 
       broadcast({:trace_events, session, events})
@@ -152,7 +186,7 @@ defmodule Voyager.Services.Tracer do
         {:voyager_trace_done, tracer, reason, %{dropped: dropped}},
         %{session: %{tracer: tracer, status: :running}} = state
       ) do
-    {:noreply, finish(state, reason, dropped + state.dropped_here)}
+    {:noreply, finish(state, reason, state.run.dropped + dropped + state.dropped_here)}
   end
 
   def handle_info(
@@ -164,10 +198,10 @@ defmodule Voyager.Services.Tracer do
 
   def handle_info(_stale, state), do: {:noreply, state}
 
-  defp finish(state, reason, dropped) do
+  defp finish(%{run: run} = state, reason, dropped) do
     session = %{
       state.session
-      | status: :ended,
+      | status: :stopped,
         stop_reason: state.stopping || reason,
         dropped: dropped,
         ended_at: DateTime.utc_now()
@@ -177,9 +211,10 @@ defmodule Voyager.Services.Tracer do
 
     Voyager.Telemetry.dispatch!("voyager.trace.stop",
       measurements: %{
-        events: session.events,
-        dropped: session.dropped,
-        duration_ms: DateTime.diff(session.ended_at, session.started_at, :millisecond)
+        events: session.events - run.events,
+        dropped: session.dropped - run.dropped,
+        duration_ms:
+          System.convert_time_unit(System.monotonic_time() - run.at, :native, :millisecond)
       },
       metadata: %{origin: session.origin, reason: session.stop_reason}
     )
@@ -187,21 +222,12 @@ defmodule Voyager.Services.Tracer do
     %{state | session: session, stopping: nil}
   end
 
-  defp start_failed(reason, origin, state) do
+  defp start_failed(reason, state) do
     Voyager.Telemetry.dispatch!("voyager.trace.start_failed",
-      metadata: %{origin: origin, reason: reason}
+      metadata: %{origin: state.session.origin, reason: reason}
     )
 
     {:reply, {:error, reason}, state}
-  end
-
-  defp spec_metadata(spec) do
-    spec
-    |> Map.take([:capture, :scope, :return_trace])
-    |> Map.merge(%{
-      processes: if(is_list(spec[:processes]), do: :pids, else: spec[:processes]),
-      match_spec?: spec[:match_spec] != :undefined
-    })
   end
 
   defp down_reason(:noconnection), do: :node_down
