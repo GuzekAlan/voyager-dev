@@ -19,6 +19,8 @@ defmodule VoyagerWeb.TermTree do
   binaries by `{#{inspect(:"$voyager_truncated")}, :binary, prefix, byte_size}`.
   Those render as a muted placeholder so a partial term is never mistaken for a
   complete one. See `priv/voyager_agent.erl` for the truncation itself.
+  `Voyager.Erpc.inert/1` replaces funs with `{:"$voyager_fun", text}`, rendered
+  as the fun they stood for.
   """
 
   alias Voyager.Pid
@@ -27,6 +29,7 @@ defmodule VoyagerWeb.TermTree do
   alias VoyagerWeb.TermTree.State
 
   @truncated :"$voyager_truncated"
+  @fun :"$voyager_fun"
 
   @window 50
   @sort_limit 200
@@ -64,6 +67,7 @@ defmodule VoyagerWeb.TermTree do
   def children(term, offset, limit)
 
   def children({@truncated, :binary, _prefix, _size}, _offset, _limit), do: []
+  def children({@fun, _text}, _offset, _limit), do: []
 
   def children(tuple, offset, limit) when is_tuple(tuple) do
     tuple
@@ -232,6 +236,10 @@ defmodule VoyagerWeb.TermTree do
         Segment.muted(" … (truncated, #{size} bytes)")
       ]
     }
+  end
+
+  defp build({@fun, text}) when is_binary(text) do
+    %Node{kind: :other, content: [Segment.other(text)]}
   end
 
   defp build(binary) when is_binary(binary) do

@@ -34,12 +34,12 @@ defmodule Voyager.Services.DistributionTest do
       on_exit(fn -> if Node.alive?(), do: :net_kernel.stop() end)
     end
 
-    test "refuses to start without the filtering carrier" do
-      Application.put_env(:voyager, :unfiltered_distribution, false)
-      on_exit(fn -> Application.put_env(:voyager, :unfiltered_distribution, true) end)
-
-      assert Distribution.ensure_distributed(:longnames) == {:error, :unfiltered_distribution}
-      refute Node.alive?()
+    test "only -proto_dist dual_tcp on its own counts as the filtering carrier" do
+      assert Distribution.filtering_carrier?({:ok, [[~c"dual_tcp"]]})
+      refute Distribution.filtering_carrier?(:error)
+      refute Distribution.filtering_carrier?({:ok, [[~c"inet_tcp"]]})
+      refute Distribution.filtering_carrier?({:ok, [[~c"dual_tcp", ~c"inet_tcp"]]})
+      refute Distribution.filtering_carrier?({:ok, [[~c"dual_tcp"], [~c"inet_tcp"]]})
     end
 
     test "starts distribution with a :longnames node pinned to 127.0.0.1" do

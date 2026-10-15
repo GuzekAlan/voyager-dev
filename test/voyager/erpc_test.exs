@@ -55,7 +55,7 @@ defmodule Voyager.ErpcTest do
     test "results cannot carry funs or structs that run local code" do
       result = Erpc.Impl.call(node(), Stream, :map, [[:pwned], &send(self(), &1)], 5_000)
 
-      assert %{"__struct__" => "Stream", funs: [fun]} = result
+      assert %{"__struct__" => "Stream", funs: [{:"$voyager_fun", fun}]} = result
       assert is_binary(fun)
       Enum.to_list(result)
       refute_received :pwned

@@ -22,6 +22,15 @@ defmodule VoyagerWeb.TermTreeTest do
   defp child_terms(children), do: Enum.map(children, fn {_key, term} -> term end)
 
   describe "describe/2 leaves" do
+    test "a fun made inert by the dist client renders as the fun it stood for" do
+      marker = {:"$voyager_fun", "#Function<1.2/3 in Mod.fun>"}
+
+      assert %Node{kind: :other, content: [%Segment{text: "#Function<1.2/3 in Mod.fun>"}]} =
+               TermTree.describe(marker)
+
+      assert TermTree.children(marker, 0, 10) == []
+    end
+
     test "atoms carry their own segment kind" do
       assert %Node{kind: :atom, content: [%Segment{text: ":foo", kind: :atom}]} =
                TermTree.describe(:foo)

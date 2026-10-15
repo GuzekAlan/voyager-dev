@@ -8,6 +8,7 @@ defmodule Voyager.Erpc do
   """
 
   @default_timeout 5_000
+  @fun :"$voyager_fun"
 
   @type timeout_time :: 0..4_294_967_295 | :infinity | {:abs, integer()}
   @type call_options :: %{timeout: timeout_time(), always_spawn: boolean()}
@@ -78,12 +79,13 @@ defmodule Voyager.Erpc do
   end
 
   @doc """
-  Replaces funs with their inspected text and turns every struct into a plain map
-  whose `"__struct__"` string key names the module, so no local function or
-  protocol implementation can be reached through a term from the remote node.
+  Replaces funs with `{:"$voyager_fun", inspected_text}` and turns every struct
+  into a plain map whose `"__struct__"` string key names the module, so no local
+  function or protocol implementation can be reached through a term from the
+  remote node.
   """
   @spec inert(term()) :: term()
-  def inert(term) when is_function(term), do: inspect(term)
+  def inert(term) when is_function(term), do: {@fun, inspect(term)}
   def inert(list) when is_list(list), do: inert_list(list)
 
   def inert(tuple) when is_tuple(tuple),

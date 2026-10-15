@@ -73,9 +73,16 @@ defmodule Voyager.Services.Distribution do
     end
   end
 
-  # Only dual_tcp_dist drops what the remote node may not send; any other carrier lets it run code here.
+  @doc """
+  Whether a `-proto_dist` argument, as `:init.get_argument/1` returns it, names
+  `dual_tcp_dist` alone. Any other carrier lets a connected node run code here.
+  """
+  @spec filtering_carrier?(term()) :: boolean()
+  def filtering_carrier?({:ok, [[~c"dual_tcp"]]}), do: true
+  def filtering_carrier?(_proto_dist_argument), do: false
+
   defp filtered? do
-    :init.get_argument(:proto_dist) == {:ok, [[~c"dual_tcp"]]} or
+    filtering_carrier?(:init.get_argument(:proto_dist)) or
       Application.get_env(:voyager, :unfiltered_distribution, false)
   end
 
