@@ -680,7 +680,7 @@ bound_records([Record | Rest], Budget, Truncated, Acc) ->
          events = 0 :: non_neg_integer(),
          dropped = 0 :: non_neg_integer(),
          window :: {integer(), non_neg_integer()},
-         names = #{} :: #{pid() => term()}}).
+         names = {#{}, #{}} :: {#{pid() => term()}, #{pid() => term()}}}).
 
 -type trace_match_spec() :: [{term(), [term()], [term()]}].
 -type trace_spec() ::
@@ -1089,19 +1089,22 @@ tick({Start, Count}) ->
             {{Start, Count + 1}, Count + 1}
     end.
 
-process_label(Pid, Names) ->
-    case Names of
-        #{Pid := Label} ->
+process_label(Pid, {Current, Previous} = Names) ->
+    case {Current, Previous} of
+        {#{Pid := Label}, _} ->
             {Label, Names};
+        {_, #{Pid := Label}} ->
+            {Label, remember_label(Pid, Label, Names)};
         _ ->
             Label = lookup_label(Pid),
-            {Label, maps:put(Pid, Label, cap_names(Names))}
+            {Label, remember_label(Pid, Label, Names)}
     end.
 
-cap_names(Names) when map_size(Names) >= ?TRACE_NAMES_CAP ->
-    #{};
-cap_names(Names) ->
-    Names.
+%% Two generations: callers seen since the last rotation survive it, cold and dead ones age out.
+remember_label(Pid, Label, {Current, _Previous}) when map_size(Current) >= ?TRACE_NAMES_CAP div 2 ->
+    {#{Pid => Label}, Current};
+remember_label(Pid, Label, {Current, Previous}) ->
+    {Current#{Pid => Label}, Previous}.
 
 lookup_label(Pid) ->
     case erlang:process_info(Pid, [registered_name, {dictionary, '$initial_call'}, initial_call])

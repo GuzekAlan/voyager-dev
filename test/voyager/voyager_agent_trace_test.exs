@@ -120,6 +120,24 @@ defmodule VoyagerAgentTraceTest do
     assert {[%{pid: ^later}], :event_limit, _stats} = collect(tracer)
   end
 
+  test "labels stay correct across more callers than the label cache holds" do
+    callers = 600
+    {:ok, tracer} = start(spec(@leap_year ++ [processes: :new]), %{@limits | max_events: callers})
+
+    names =
+      Map.new(1..callers, fn i ->
+        name = :"voyager_trace_label_#{i}"
+        start = {Agent, :start_link, [fn -> nil end, [name: name]]}
+        {start_supervised!(%{id: name, start: start}), name}
+      end)
+
+    for name <- Map.values(names),
+        do: Agent.get(name, fn _ -> Date.leap_year?(~D[2024-01-01]) end)
+
+    assert {events, :event_limit, _stats} = collect(tracer)
+    assert Enum.all?(events, fn %{pid: pid, process: label} -> label == names[pid] end)
+  end
+
   test "return trace pairs a call with its return value" do
     {:ok, tracer} = start(spec(return_trace: true), %{@limits | max_events: 2})
 
