@@ -15,9 +15,11 @@ defmodule VoyagerWeb.FormSchemas.SshConnectionParams do
     field :auth_method, Ecto.Enum, values: [:agent, :password, :key], default: :agent
     field :password, :string
     field :key_path, :string
+    field :passphrase, :string
     field :epmd_port, :integer, default: 4369
     field :remember_cookie, :boolean, default: false
     field :remember_password, :boolean, default: false
+    field :remember_passphrase, :boolean, default: false
   end
 
   @type t :: %__MODULE__{
@@ -30,9 +32,11 @@ defmodule VoyagerWeb.FormSchemas.SshConnectionParams do
           auth_method: :agent | :password | :key,
           password: String.t() | nil,
           key_path: String.t() | nil,
+          passphrase: String.t() | nil,
           epmd_port: integer(),
           remember_cookie: boolean(),
-          remember_password: boolean()
+          remember_password: boolean(),
+          remember_passphrase: boolean()
         }
 
   @spec changeset(map()) :: Ecto.Changeset.t()
@@ -70,8 +74,9 @@ defmodule VoyagerWeb.FormSchemas.SshConnectionParams do
   def to_auth(%__MODULE__{auth_method: :password, password: pw}) when is_binary(pw),
     do: {:password, pw}
 
-  def to_auth(%__MODULE__{auth_method: :key, key_path: path}) when is_binary(path),
-    do: {:key, path, nil}
+  def to_auth(%__MODULE__{auth_method: :key, key_path: path, passphrase: passphrase})
+      when is_binary(path),
+      do: {:key, path, passphrase}
 
   defp validate_auth_fields(changeset) do
     case get_field(changeset, :auth_method) do

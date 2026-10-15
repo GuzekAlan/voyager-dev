@@ -32,6 +32,8 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     |> assign(:show_ssh_advanced, false)
     |> assign(:ssh_connecting, false)
     |> assign(:ssh_last_applied, nil)
+    |> assign(:passphrase_form, nil)
+    |> assign(:key_passphrase, nil)
     |> RecentConnections.init(
       queries: SshConnectionQueries,
       actions: SshConnectionActions
@@ -217,6 +219,18 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
       <p class="font-mono tracking-snug text-base-content/70 mt-6 text-center text-xs">
         Remote nodes via SSH
       </p>
+
+      <ConnectComponents.passphrase_modal
+        :if={@passphrase_form}
+        id={"#{@id_prefix}passphrase-modal"}
+        form={@passphrase_form}
+        key_path={@ssh_last_applied.key_path}
+        shown={SecretVisibility.shown?(@secret_visibility, "passphrase")}
+        target={@myself}
+        on_change="change_passphrase"
+        on_submit="submit_passphrase"
+        on_cancel="cancel_passphrase"
+      />
     </div>
     """
   end
@@ -292,12 +306,40 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
       {:ok, %SshConnectionParams{} = p} ->
         socket
         |> assign(:ssh_form, to_form(changeset, as: :ssh))
-        |> start_ssh_connect(p)
+        |> connect_or_prompt(%{
+          p
+          | passphrase: key_passphrase(socket.assigns.key_passphrase, p.key_path)
+        })
         |> noreply()
 
       {:error, changeset} ->
         {:noreply, assign(socket, :ssh_form, to_form(changeset, as: :ssh))}
     end
+  end
+
+  def handle_event("change_passphrase", %{"passphrase" => params}, socket) do
+    {:noreply, assign(socket, :passphrase_form, to_form(params, as: :passphrase))}
+  end
+
+  def handle_event(
+        "submit_passphrase",
+        %{"passphrase" => %{"passphrase" => passphrase, "remember" => remember}},
+        socket
+      ) do
+    p = %{
+      socket.assigns.ssh_last_applied
+      | passphrase: passphrase,
+        remember_passphrase: remember == "true"
+    }
+
+    socket
+    |> assign(:passphrase_form, nil)
+    |> connect_or_prompt(p)
+    |> noreply()
+  end
+
+  def handle_event("cancel_passphrase", _params, socket) do
+    {:noreply, assign(socket, :passphrase_form, nil)}
   end
 
   def handle_event("fill_ssh_recent", _params, %{assigns: %{connected?: true}} = socket) do
@@ -325,6 +367,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
 
       socket
       |> assign(:ssh_form, key_checked_form(SshConnectionParams.changeset(params)))
+      |> assign(:key_passphrase, conn.passphrase && {conn.key_path, conn.passphrase})
       |> SecretVisibility.reset()
     end)
   end
@@ -380,6 +423,32 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     end)
   end
 
+  defp connect_or_prompt(socket, %SshConnectionParams{auth_method: :key} = p) do
+    case KeyFile.check(p.key_path, p.passphrase) do
+      {:error, reason} when reason in [:key_passphrase_required, :key_bad_passphrase] ->
+        socket
+        |> assign(:ssh_last_applied, p)
+        |> assign(:passphrase_form, passphrase_form(reason, p.remember_passphrase))
+
+      _ ->
+        socket
+        |> assign(:key_passphrase, p.passphrase && {p.key_path, p.passphrase})
+        |> start_ssh_connect(p)
+    end
+  end
+
+  defp connect_or_prompt(socket, p), do: start_ssh_connect(socket, p)
+
+  defp passphrase_form(reason, remember) do
+    errors =
+      if reason == :key_bad_passphrase, do: [passphrase: {"Wrong passphrase", []}], else: []
+
+    to_form(%{"remember" => to_string(remember)}, as: :passphrase, errors: errors)
+  end
+
+  defp key_passphrase({path, passphrase}, path), do: passphrase
+  defp key_passphrase(_saved, _path), do: nil
+
   defp finish_connecting(socket) do
     send(self(), {:ssh_connecting, false})
     assign(socket, :ssh_connecting, false)
@@ -396,6 +465,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
       auth_method: p.auth_method,
       password: if(p.remember_password and p.auth_method == :password, do: p.password),
       key_path: if(p.auth_method == :key, do: p.key_path),
+      passphrase: if(p.remember_passphrase, do: p.passphrase),
       epmd_port: p.epmd_port
     )
   end
