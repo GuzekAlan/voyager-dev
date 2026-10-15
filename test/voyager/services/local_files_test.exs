@@ -29,14 +29,6 @@ defmodule Voyager.Services.LocalFilesTest do
       assert File.read!(path) == "host key\n"
     end
 
-    test "leaves the file accessible only to its owner", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "known_hosts")
-
-      assert LocalFiles.write(path, "host key\n") == :ok
-      # Octal: 0o100000 is the regular-file type bit, 0o600 is owner-only read and write.
-      assert File.stat!(path).mode == 0o100600
-    end
-
     test "appends when asked to", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "known_hosts")
 

@@ -17,8 +17,7 @@ defmodule Voyager.Services.LocalFiles do
     path = Path.expand(path)
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
-         :ok <- File.write(path, contents, modes),
-         :ok <- File.chmod(path, 0o600) do
+         :ok <- File.write(path, contents, modes) do
       :ok
     else
       {:error, reason} -> {:error, {:write_failed, {path, reason}}}
