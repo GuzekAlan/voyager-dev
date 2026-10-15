@@ -98,14 +98,18 @@ defmodule Voyager.Services.Tracer do
 
         broadcast({:tracing_started, session})
 
+        Voyager.Telemetry.dispatch!("voyager.trace.start",
+          metadata: Map.put(spec_metadata(spec), :origin, origin)
+        )
+
         {:reply, {:ok, session},
          %{state | session: session, events: [], dropped_here: 0, stopping: nil}}
 
       {:ok, {:error, reason}} ->
-        {:reply, {:error, reason}, state}
+        start_failed(reason, origin, state)
 
       {:error, reason} ->
-        {:reply, {:error, reason}, state}
+        start_failed(reason, origin, state)
     end
   end
 
@@ -170,7 +174,34 @@ defmodule Voyager.Services.Tracer do
     }
 
     broadcast({:tracing_ended, session})
+
+    Voyager.Telemetry.dispatch!("voyager.trace.stop",
+      measurements: %{
+        events: session.events,
+        dropped: session.dropped,
+        duration_ms: DateTime.diff(session.ended_at, session.started_at, :millisecond)
+      },
+      metadata: %{origin: session.origin, reason: session.stop_reason}
+    )
+
     %{state | session: session, stopping: nil}
+  end
+
+  defp start_failed(reason, origin, state) do
+    Voyager.Telemetry.dispatch!("voyager.trace.start_failed",
+      metadata: %{origin: origin, reason: reason}
+    )
+
+    {:reply, {:error, reason}, state}
+  end
+
+  defp spec_metadata(spec) do
+    spec
+    |> Map.take([:capture, :scope, :return_trace])
+    |> Map.merge(%{
+      processes: if(is_list(spec[:processes]), do: :pids, else: spec[:processes]),
+      match_spec?: spec[:match_spec] != :undefined
+    })
   end
 
   defp down_reason(:noconnection), do: :node_down

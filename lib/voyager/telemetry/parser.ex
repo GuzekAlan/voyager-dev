@@ -68,6 +68,12 @@ defmodule Voyager.Telemetry.Parser do
   def parse_measurements([:voyager, :node, :disconnect], _m), do: %{}
   def parse_measurements([:voyager, :mcp, :start], _m), do: %{}
   def parse_measurements([:voyager, :mcp, :stop], _m), do: %{}
+  def parse_measurements([:voyager, :trace, :start], _m), do: %{}
+  def parse_measurements([:voyager, :trace, :start_failed], _m), do: %{}
+
+  def parse_measurements([:voyager, :trace, :stop], m) do
+    Map.take(m, [:events, :dropped, :duration_ms])
+  end
 
   def parse_measurements([:anubis_mcp, :server, :tool_call, :start], _m), do: %{}
 
@@ -119,6 +125,14 @@ defmodule Voyager.Telemetry.Parser do
   def parse_metadata([:voyager, :mcp, :start], meta), do: %{reason: meta[:reason]}
   def parse_metadata([:voyager, :mcp, :stop], meta), do: %{reason: meta[:reason]}
 
+  def parse_metadata([:voyager, :trace, :start], meta) do
+    Map.take(meta, [:origin, :capture, :scope, :return_trace, :processes, :match_spec?])
+  end
+
+  def parse_metadata([:voyager, :trace, event], meta) when event in [:start_failed, :stop] do
+    %{origin: meta[:origin], reason: trace_reason(meta[:reason])}
+  end
+
   def parse_metadata([:anubis_mcp, :server, :tool_call, :start], meta) do
     %{tool: meta[:tool]}
   end
@@ -153,4 +167,12 @@ defmodule Voyager.Telemetry.Parser do
   end
 
   defp sanitize_reason(_reason), do: "unknown"
+
+  # Trace reasons are atoms from the agent and the Tracer; tuple payloads can carry module names or pids.
+  defp trace_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp trace_reason(reason) when is_tuple(reason) and is_atom(elem(reason, 0)),
+    do: reason |> elem(0) |> Atom.to_string()
+
+  defp trace_reason(_reason), do: "unknown"
 end
