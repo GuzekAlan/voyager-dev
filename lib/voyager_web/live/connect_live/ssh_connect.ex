@@ -8,6 +8,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   alias Voyager.NodeSession
   alias Voyager.NodeSession.Connectors.Ssh, as: SshConnector
   alias Voyager.Queries.SshConnections, as: SshConnectionQueries
+  alias Voyager.Services.SSH.KeyFile
   alias VoyagerWeb.ConnectComponents
   alias VoyagerWeb.ConnectLive.RecentConnections
   alias VoyagerWeb.ConnectLive.SecretVisibility
@@ -123,7 +124,8 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
             disabled={@connected? or @ssh_connecting}
             options={[
               %{value: "agent", label: "SSH Agent", id: "ssh-auth-agent"},
-              %{value: "password", label: "Password", id: "ssh-auth-password"}
+              %{value: "password", label: "Password", id: "ssh-auth-password"},
+              %{value: "key", label: "Key file", id: "ssh-auth-key"}
             ]}
           />
         </div>
@@ -138,6 +140,14 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
           remember_name="ssh[remember_password]"
           remember_checked={to_string(@ssh_form[:remember_password].value) == "true"}
           remember_label="Remember password"
+          disabled={@connected? or @ssh_connecting}
+        />
+
+        <ConnectComponents.path_field
+          :if={@current_auth_method == "key"}
+          field={@ssh_form[:key_path]}
+          label="Identity file"
+          placeholder="~/.ssh/id_ed25519"
           disabled={@connected? or @ssh_connecting}
         />
 
@@ -237,6 +247,11 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
             </span>
             <ConnectComponents.saved_badge :if={@conn.cookie} label="cookie" title="Cookie saved" />
             <ConnectComponents.saved_badge :if={@conn.password} label="pass" title="Password saved" />
+            <ConnectComponents.saved_badge
+              :if={@conn.passphrase}
+              label="key"
+              title="Key passphrase saved"
+            />
           </div>
         </div>
         <span class="font-mono text-base-content/70 shrink-0 self-center text-xs">
@@ -259,7 +274,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   @impl true
   def handle_event("validate_ssh", %{"ssh" => params}, socket) do
     changeset = SshConnectionParams.changeset(params)
-    {:noreply, assign(socket, :ssh_form, to_form(changeset, as: :ssh))}
+    {:noreply, assign(socket, :ssh_form, key_checked_form(changeset))}
   end
 
   def handle_event("toggle_ssh_advanced", _, socket) do
@@ -271,7 +286,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   end
 
   def handle_event("connect_ssh", %{"ssh" => params}, socket) do
-    changeset = SshConnectionParams.changeset(params)
+    changeset = params |> SshConnectionParams.changeset() |> add_key_file_error()
 
     case Ecto.Changeset.apply_action(changeset, :insert) do
       {:ok, %SshConnectionParams{} = p} ->
@@ -304,11 +319,12 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
         "name_type" => to_string(conn.name_type),
         "auth_method" => to_string(conn.auth_method),
         "password" => conn.password || "",
+        "key_path" => conn.key_path || "",
         "epmd_port" => to_string(conn.epmd_port)
       }
 
       socket
-      |> assign(:ssh_form, to_form(SshConnectionParams.changeset(params), as: :ssh))
+      |> assign(:ssh_form, key_checked_form(SshConnectionParams.changeset(params)))
       |> SecretVisibility.reset()
     end)
   end
@@ -379,9 +395,36 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
       name_type: p.name_type,
       auth_method: p.auth_method,
       password: if(p.remember_password and p.auth_method == :password, do: p.password),
+      key_path: if(p.auth_method == :key, do: p.key_path),
       epmd_port: p.epmd_port
     )
   end
+
+  defp key_checked_form(changeset) do
+    form = to_form(changeset, as: :ssh)
+    %{form | errors: add_key_file_error(changeset).errors -- changeset.errors}
+  end
+
+  defp add_key_file_error(changeset) do
+    case changeset |> Ecto.Changeset.apply_changes() |> check_key_file() do
+      :ok ->
+        changeset
+
+      {:error, reason} ->
+        {field, msg} = ssh_connect_error(reason)
+        Ecto.Changeset.add_error(changeset, field, msg)
+    end
+  end
+
+  defp check_key_file(%SshConnectionParams{auth_method: :key, key_path: path})
+       when is_binary(path) do
+    case KeyFile.check(path, nil) do
+      {:error, :key_passphrase_required} -> :ok
+      result -> result
+    end
+  end
+
+  defp check_key_file(%SshConnectionParams{}), do: :ok
 
   defp with_ssh_connection(socket, id, fun) do
     case Integer.parse(id) do
@@ -471,6 +514,16 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
 
   defp ssh_connect_error({:agent_install_failed, _}),
     do: {:node_name, "Could not load the Voyager agent on the node"}
+
+  defp ssh_connect_error(:key_encrypted_openssh),
+    do:
+      {:key_path,
+       "Passphrase-protected OpenSSH keys aren't supported — use SSH Agent or Password"}
+
+  defp ssh_connect_error(:key_unreadable),
+    do: {:key_path, "Not a private key Voyager can read"}
+
+  defp ssh_connect_error({:read_failed, _}), do: {:key_path, "Can't read this file"}
 
   defp ssh_connect_error(_), do: {:node_name, "Could not connect to remote node"}
 end
