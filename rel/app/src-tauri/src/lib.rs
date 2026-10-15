@@ -43,6 +43,7 @@ pub fn run() {
             focus_existing_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![os_theme])
         .manage(ZoomLevel(Mutex::new(DEFAULT_ZOOM)))

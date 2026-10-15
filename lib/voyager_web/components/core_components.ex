@@ -946,9 +946,9 @@ defmodule VoyagerWeb.CoreComponents do
 
   attr :show_when, :string,
     default: nil,
-    values: [nil, "sidebar-compact"],
+    values: [nil, "sidebar-compact", "browser"],
     doc:
-      "when set to sidebar-compact, the tip only opens while the app sidebar is in compact (icon-only) mode"
+      "restricts when the tip opens: sidebar-compact while the app sidebar is in compact (icon-only) mode, browser outside the desktop app"
 
   slot :inner_block, required: true, doc: "the hover/focus target"
   slot :content, required: true, doc: "tooltip content"

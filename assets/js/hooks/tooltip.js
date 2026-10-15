@@ -143,12 +143,9 @@ const Tooltip = {
 
     this.show = () => {
       clearTimeout(this._closeTimeout);
-      if (
-        this.el.dataset.tooltipShowWhen === 'sidebar-compact' &&
-        !isSidebarCompact()
-      ) {
-        return;
-      }
+      const showWhen = this.el.dataset.tooltipShowWhen;
+      if (showWhen === 'sidebar-compact' && !isSidebarCompact()) return;
+      if (showWhen === 'browser' && window.__TAURI_INTERNALS__) return;
       const tipEl = this.getTip();
       if (!tipEl) return;
       if (this._interactive) this.bindTip(tipEl);
