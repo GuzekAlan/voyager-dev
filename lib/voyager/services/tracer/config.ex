@@ -59,15 +59,14 @@ defmodule Voyager.Services.Tracer.Config do
     |> validate_module_allowed()
   end
 
-  @doc "The `{spec, limits}` pair `trace_start` takes on the agent."
-  @spec to_agent(t()) :: {map(), map()}
-  def to_agent(%__MODULE__{} = config) do
+  @doc "The `{spec, limits}` pair `trace_start` takes on the agent; `pids` are the resolved `:pids`."
+  @spec to_agent(t(), [pid()]) :: {map(), map()}
+  def to_agent(%__MODULE__{} = config, pids) do
     spec = %{
       module: config.module,
       function: if(config.function == "_", do: :_, else: config.function),
       arity: config.arity || :_,
-      processes:
-        if(config.processes == :pids, do: parse_pids(config.pids), else: config.processes),
+      processes: if(config.processes == :pids, do: pids, else: config.processes),
       capture: config.capture,
       scope: config.scope,
       return_trace: config.return_trace,

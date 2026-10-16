@@ -136,7 +136,7 @@ defmodule Voyager.NodeSession do
   end
 
   def handle_call(:disconnect, _from, %{session: session} = state) do
-    :ok = Tracer.stop(:disconnected)
+    :ok = Tracer.disconnected()
     session.connector.disconnect(session.node, session.meta)
     new_state = drop_session(state, session, :node_disconnected, "manual disconnect")
 

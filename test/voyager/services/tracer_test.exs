@@ -55,6 +55,12 @@ defmodule Voyager.Services.TracerTest do
     refute_receive {:tracing_configured, _session}
   end
 
+  test "resolves selected pids on the traced node" do
+    attrs = %{module: "Elixir.Date", pids: ["<0.45.6>"], max_events: 1}
+    assert {:error, :noconnection} = Tracer.configure(:other@nohost, attrs, :ui)
+    refute_receive {:tracing_configured, _session}
+  end
+
   test "refuses to start without a config" do
     :sys.replace_state(Tracer, &%{&1 | session: nil})
     assert {:error, :not_configured} = Tracer.start()
@@ -67,10 +73,12 @@ defmodule Voyager.Services.TracerTest do
     assert {:error, :busy} = configure()
   end
 
-  test "reports the caller's stop reason" do
+  test "ends a disconnected session when its tracer goes down" do
     assert {:ok, %{id: id}} = configure()
-    assert {:ok, _session} = Tracer.start()
-    assert :ok = Tracer.stop(:disconnected)
+    assert {:ok, %{tracer: tracer}} = Tracer.start()
+    assert :ok = Tracer.disconnected()
+    _ = :sys.get_state(Tracer)
+    Process.exit(tracer, :noconnection)
     assert_receive {:tracing_ended, %{id: ^id, stop_reason: :disconnected}}
   end
 

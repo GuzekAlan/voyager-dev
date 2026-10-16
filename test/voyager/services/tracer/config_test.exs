@@ -25,15 +25,15 @@ defmodule Voyager.Services.Tracer.ConfigTest do
               scope: :global,
               return_trace: false,
               match_spec: :undefined
-            }, %{budget: 5_000, max_events: 10} = limits} = Config.to_agent(config)
+            }, %{budget: 5_000, max_events: 10} = limits} = Config.to_agent(config, [self()])
 
-    assert is_pid(pid)
+    assert pid == self()
     refute Map.has_key?(limits, :max_rate)
   end
 
   test "turns empty function and arity into agent wildcards" do
     assert {:ok, config} = apply_attrs(%{@valid | function: "_", arity: nil})
-    assert {%{function: :_, arity: :_}, _limits} = Config.to_agent(config)
+    assert {%{function: :_, arity: :_}, _limits} = Config.to_agent(config, [self()])
   end
 
   test "requires an empty arity with a wildcard function" do
