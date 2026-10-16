@@ -8,6 +8,7 @@
 -export([proc_links/2, proc_monitors/2, proc_monitored_by/2]).
 -export([proc_dictionary/3, proc_messages/3, proc_label/2, proc_state/3]).
 -export([ets_select_chunk/4, ets_lookup/5, ets_select_spec/5]).
+-export([trace_start/3, trace_stop/1, trace_sessions/0]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
@@ -632,6 +633,517 @@ bound_records([], _Budget, Truncated, Acc) ->
 bound_records([Record | Rest], Budget, Truncated, Acc) ->
     {Bounded, Cut} = bound_term(Record, Budget),
     bound_records(Rest, Budget, Truncated orelse Cut, [Bounded | Acc]).
+
+%% =====================================================================
+%% TRACING - One OTP trace session per trace, owned by an unlinked tracer.
+%% =====================================================================
+
+-define(TRACE_FLUSH_MS, 100).
+-define(TRACE_BATCH, 200).
+%% Budget units held unsent: 200 full-budget events would blow the tracer's `max_heap_size'.
+-define(TRACE_BATCH_BUDGET, 400_000).
+%% Counts messages, not bytes: a large-args flood on `all' can still peak at GBs.
+-define(TRACE_MAX_MAILBOX, 5_000).
+%% Below Voyager's 5 s erpc timeout, so the worker gives up (and kills the tracer) first.
+-define(TRACE_TIMEOUT, 4_000).
+-define(TRACE_MAX_TIME_MS, 3_600_000).
+-define(TRACE_MAX_BUDGET, 100_000).
+-define(TRACE_MAX_MATCH_SPEC_BYTES, 65_536).
+-define(TRACER_TAG, '$voyager_tracer').
+-define(TRACE_NAMES_CAP, 1_000).
+-define(TRACE_MAX_SESSIONS, 5).
+-define(TRACE_MAX_PIDS, 100).
+-define(TRACE_MAX_CLAUSES, 10).
+-define(TRACE_SPEC_FIELDS,
+        [module, function, arity, processes, capture, scope, return_trace, match_spec]).
+-define(TRACE_LIMITS, [max_events, max_rate, max_time_ms]).
+-define(TRACE_PROCESS_SETS, [all, existing, new]).
+-define(TRACE_ALWAYS_REFUSED, [?MODULE, trace]).
+%% Called from nearly every process: an all-process call trace on them floods the tracer.
+-define(TRACE_HOT,
+        [erlang, lists, maps, ets, gen, gen_server, gen_statem, gen_event, proc_lib, io, io_lib,
+         logger, timer, code, erl_eval, 'Elixir.Enum', 'Elixir.Map', 'Elixir.Kernel',
+         'Elixir.String', 'Elixir.GenServer', erpc, rpc, gen_tcp, inet, ssl, net_kernel,
+         dist_util, proplists, persistent_term, unicode, binary, telemetry, 'Elixir.Keyword',
+         'Elixir.Access', 'Elixir.Enumerable', 'Elixir.List']).
+-define(TRACE_REFUSED_ACTIONS,
+        [trace, enable_trace, disable_trace, silent, set_seq_token, process_dump, display,
+         current_stacktrace, caller_line, set_tcw, return_trace, exception_trace]).
+
+-record(tracer,
+        {session,
+         collector :: pid(),
+         limits :: trace_limits(),
+         budget :: non_neg_integer(),
+         buffer = [] :: [map()],
+         buffered = 0 :: non_neg_integer(),
+         events = 0 :: non_neg_integer(),
+         dropped = 0 :: non_neg_integer(),
+         window :: {integer(), non_neg_integer()},
+         names = {#{}, #{}} :: {#{pid() => term()}, #{pid() => term()}}}).
+
+-type trace_match_spec() :: [{term(), [term()], [term()]}].
+-type trace_spec() ::
+    #{module := binary(),
+      function := binary() | '_',
+      arity := 0..255 | '_',
+      processes := all | existing | new | [pid()],
+      capture := arity | args,
+      scope := local | global,
+      return_trace := boolean(),
+      match_spec := undefined | trace_match_spec()}.
+-type trace_limits() ::
+    #{max_events => pos_integer(),
+      max_rate => pos_integer(),
+      max_time_ms => pos_integer(),
+      budget := non_neg_integer()}.
+
+-spec trace_start(pid(), trace_spec(), trace_limits()) -> {ok, pid()} | {error, term()}.
+trace_start(Collector, Spec, Limits) when is_pid(Collector) ->
+    case trace_validate(Spec, Limits) of
+        {ok, Plan} ->
+            spawn_tracer(Collector, Plan);
+        {error, _} = Error ->
+            Error
+    end;
+trace_start(_Collector, _Spec, _Limits) ->
+    {error, {invalid, collector}}.
+
+-spec trace_stop(pid()) -> ok | {error, timeout | not_found}.
+trace_stop(Tracer) when is_pid(Tracer), node(Tracer) =:= node() ->
+    case erlang:process_info(Tracer, {dictionary, ?TRACER_TAG}) of
+        {_, true} ->
+            stop_tracer(Tracer);
+        _ ->
+            {error, not_found}
+    end;
+trace_stop(_Tracer) ->
+    {error, not_found}.
+
+stop_tracer(Tracer) ->
+    MRef = erlang:monitor(process, Tracer),
+    Tracer ! voyager_trace_stop,
+    receive
+        {'DOWN', MRef, process, Tracer, noproc} ->
+            {error, not_found};
+        {'DOWN', MRef, process, Tracer, _Reason} ->
+            ok
+    after ?TRACE_TIMEOUT ->
+        exit(Tracer, kill),
+        erlang:demonitor(MRef, [flush]),
+        {error, timeout}
+    end.
+
+-spec trace_sessions() -> non_neg_integer().
+trace_sessions() ->
+    length(voyager_sessions()).
+
+trace_validate(Spec, Limits) ->
+    maybe
+        ok ?= first_invalid(?TRACE_SPEC_FIELDS, fun(Field) -> spec_field(Field, Spec) end),
+        ok ?= check_limits(Limits),
+        #{processes := Processes, scope := Scope, return_trace := ReturnTrace} = Spec,
+        {ok, {M, _, _} = MFA} ?= trace_mfa(Spec),
+        ok ?= traceable(M, Processes),
+        {ok, MatchSpec} ?= trace_match_spec(maps:get(match_spec, Spec), ReturnTrace),
+        {ok, {MFA, Scope, MatchSpec, Processes, trace_flags(Spec), Limits}}
+    end.
+
+first_invalid(Fields, Valid) ->
+    case lists:search(fun(Field) -> not Valid(Field) end, Fields) of
+        {value, Field} ->
+            {error, {invalid, Field}};
+        false ->
+            ok
+    end.
+
+spec_field(Field, Spec) ->
+    case Spec of
+        #{Field := Value} ->
+            valid_spec_value(Field, Value);
+        _ ->
+            false
+    end.
+
+valid_spec_value(module, Module) ->
+    is_binary(Module) andalso Module =/= <<"_">>;
+valid_spec_value(function, Function) ->
+    is_binary(Function) orelse Function =:= '_';
+valid_spec_value(arity, Arity) ->
+    Arity =:= '_' orelse is_integer(Arity) andalso Arity >= 0 andalso Arity =< 255;
+valid_spec_value(capture, Capture) ->
+    Capture =:= arity orelse Capture =:= args;
+valid_spec_value(scope, Scope) ->
+    Scope =:= local orelse Scope =:= global;
+valid_spec_value(return_trace, ReturnTrace) ->
+    is_boolean(ReturnTrace);
+valid_spec_value(processes, Pids)
+    when is_list(Pids), length(Pids) > 0, length(Pids) =< ?TRACE_MAX_PIDS ->
+    lists:all(fun(Pid) -> is_pid(Pid) andalso node(Pid) =:= node() end, Pids);
+valid_spec_value(processes, ProcessSet) ->
+    lists:member(ProcessSet, ?TRACE_PROCESS_SETS);
+valid_spec_value(match_spec, undefined) ->
+    true;
+valid_spec_value(match_spec, MatchSpec)
+    when is_list(MatchSpec), length(MatchSpec) > 0, length(MatchSpec) =< ?TRACE_MAX_CLAUSES ->
+    erlang:external_size(MatchSpec) =< ?TRACE_MAX_MATCH_SPEC_BYTES
+    andalso lists:all(fun({_Head, Guards, Body}) -> is_list(Guards) andalso is_list(Body);
+                         (_Clause) -> false
+                      end,
+                      MatchSpec);
+valid_spec_value(_Field, _Value) ->
+    false.
+
+check_limits(Limits) ->
+    first_invalid([budget | ?TRACE_LIMITS] ++ [limits],
+                  fun(Field) -> limit_field(Field, Limits) end).
+
+limit_field(limits, Limits) ->
+    lists:any(fun(Key) -> is_map_key(Key, Limits) end, ?TRACE_LIMITS);
+limit_field(Field, Limits) ->
+    case Limits of
+        #{Field := Value} ->
+            valid_limit(Field, Value);
+        _ ->
+            Field =/= budget
+    end.
+
+valid_limit(budget, Budget) ->
+    is_integer(Budget) andalso Budget >= 0 andalso Budget =< ?TRACE_MAX_BUDGET;
+valid_limit(max_time_ms, MaxTime) ->
+    is_integer(MaxTime) andalso MaxTime > 0 andalso MaxTime =< ?TRACE_MAX_TIME_MS;
+valid_limit(_Field, Limit) ->
+    is_integer(Limit) andalso Limit > 0.
+
+%% `trace:function/4' takes '_' only in the rightmost fields: {M, '_', 2} is badarg.
+trace_mfa(#{function := '_', arity := Arity}) when Arity =/= '_' ->
+    {error, {invalid, arity}};
+trace_mfa(#{module := Module, function := Function, arity := Arity}) ->
+    try {binary_to_existing_atom(Module), existing_function(Function)} of
+        {M, F} ->
+            {ok, {M, F, Arity}}
+    catch
+        error:badarg ->
+            {error, unknown_function}
+    end.
+
+existing_function('_') ->
+    '_';
+existing_function(Function) ->
+    binary_to_existing_atom(Function).
+
+traceable(Module, Processes) ->
+    case {refused(Module, Processes), code:is_loaded(Module)} of
+        {true, _} ->
+            {error, {refused, Module}};
+        {false, false} ->
+            {error, {not_loaded, Module}};
+        {false, _} ->
+            ok
+    end.
+
+refused(Module, Pids) when is_list(Pids) ->
+    lists:member(Module, ?TRACE_ALWAYS_REFUSED);
+refused(Module, _ProcessSet) ->
+    refused(Module, [])
+    orelse lists:member(Module, ?TRACE_HOT)
+    orelse hot_prefix(atom_to_binary(Module)).
+
+hot_prefix(<<"prim_", _/binary>>) ->
+    true;
+hot_prefix(<<"erts_", _/binary>>) ->
+    true;
+hot_prefix(_Module) ->
+    false.
+
+%% Atoms in a match spec are created on the remote when the dist message is decoded.
+trace_match_spec(undefined, ReturnTrace) ->
+    {ok, [{'_', [], return_body(ReturnTrace)}]};
+trace_match_spec(MatchSpec, ReturnTrace) ->
+    maybe
+        false ?= refused_action([{Guards, Body} || {_Head, Guards, Body} <- MatchSpec],
+                                refused_actions(ReturnTrace)),
+        %% `match_spec_test' runs the body here (`enable_trace' segfaults); `false' keeps it compile-only.
+        {ok, _, _, _} ?=
+            erlang:match_spec_test([], [{H, [false | G], B} || {H, G, B} <- MatchSpec], trace),
+        {ok,
+         [{Head, Guards, Body ++ return_body(ReturnTrace)} || {Head, Guards, Body} <- MatchSpec]}
+    else
+        {value, Action} ->
+            {error, {refused_action, Action}};
+        {error, Errors} ->
+            {error, {invalid_match_spec, Errors}}
+    end.
+
+%% `exception_trace' also closes a frame on a raise, so a call never stays open in Voyager.
+return_body(true) ->
+    [{exception_trace}];
+return_body(false) ->
+    [].
+
+%% With `exception_trace', silenced calls grow a tail-recursive loop's stack and no limit fires.
+refused_actions(true) ->
+    [message | ?TRACE_REFUSED_ACTIONS];
+refused_actions(false) ->
+    ?TRACE_REFUSED_ACTIONS.
+
+refused_action(Term, Refused) when is_tuple(Term), tuple_size(Term) > 0 ->
+    case lists:member(element(1, Term), Refused) of
+        true ->
+            {value, element(1, Term)};
+        false ->
+            refused_action(tuple_to_list(Term), Refused)
+    end;
+refused_action([Head | Tail], Refused) ->
+    case refused_action(Head, Refused) of
+        false ->
+            refused_action(Tail, Refused);
+        Found ->
+            Found
+    end;
+refused_action(Term, Refused) when is_map(Term) ->
+    refused_action(maps:to_list(Term), Refused);
+refused_action(_Term, _Refused) ->
+    false.
+
+trace_flags(#{capture := arity}) ->
+    [call, arity, monotonic_timestamp];
+trace_flags(#{capture := args}) ->
+    [call, monotonic_timestamp].
+
+spawn_tracer(Collector, Plan) ->
+    Caller = self(),
+    Ref = make_ref(),
+    {Pid, MRef} =
+        spawn_opt(fun() -> tracer_init(Caller, Ref, Collector, Plan) end,
+                  [monitor,
+                   {priority, high},
+                   %% Traced processes enqueue without taking the tracer's main lock, and a full
+                   %% mailbox stops the trace via `mailbox_limit' instead of a heap-limit kill.
+                   {message_queue_data, off_heap},
+                   {max_heap_size,
+                    #{size => 10_000_000,
+                      kill => true,
+                      error_logger => true}}]),
+    receive
+        {Ref, Reply} ->
+            erlang:demonitor(MRef, [flush]),
+            Reply;
+        {'DOWN', MRef, process, Pid, Reason} ->
+            {error, {tracer_down, Reason}}
+    after ?TRACE_TIMEOUT ->
+        exit(Pid, kill),
+        erlang:demonitor(MRef, [flush]),
+        {error, timeout}
+    end.
+
+%% A tracer that dies takes its session with it, so only clean failures need a destroy.
+tracer_init(Caller, Ref, Collector, {_, _, _, Processes, _, Limits} = Plan) ->
+    put(?TRACER_TAG, true),
+    Session = trace:session_create(session_name(Processes), self(), []),
+    case tracer_install(Session, Plan) of
+        ok ->
+            erlang:monitor(process, Collector),
+            MaxTime = maps:get(max_time_ms, Limits, ?TRACE_MAX_TIME_MS),
+            erlang:send_after(MaxTime, self(), voyager_trace_ttl),
+            erlang:send_after(?TRACE_FLUSH_MS, self(), voyager_trace_flush),
+            Caller ! {Ref, {ok, self()}},
+            tracer_loop(#tracer{session = Session,
+                                collector = Collector,
+                                limits = Limits,
+                                budget = maps:get(budget, Limits),
+                                window = {erlang:monotonic_time(millisecond), 0}});
+        {error, _} = Error ->
+            trace:session_destroy(Session),
+            Caller ! {Ref, Error}
+    end.
+
+session_name(Pids) when is_list(Pids) ->
+    voyager;
+session_name(_ProcessSet) ->
+    voyager_all.
+
+tracer_install(Session, {MFA, Scope, MatchSpec, Processes, Flags, _Limits}) ->
+    maybe
+        ok ?= session_cap(),
+        ok ?= trace_function(Session, MFA, MatchSpec, Scope),
+        trace_processes(Session, Processes, Flags)
+    end.
+
+%% The session exists before this count, so racers for the last slot can both lose, never both win.
+session_cap() ->
+    Sessions = voyager_sessions(),
+    case {length(Sessions), length([all || voyager_all <- Sessions])} of
+        {Total, _} when Total > ?TRACE_MAX_SESSIONS ->
+            {error, too_many_sessions};
+        {_, All} when All > 1 ->
+            {error, all_processes_busy};
+        _ ->
+            ok
+    end.
+
+voyager_sessions() ->
+    [Name || {Name, _} <- trace:session_info(all), Name =:= voyager orelse Name =:= voyager_all].
+
+trace_function(Session, MFA, MatchSpec, Scope) ->
+    case trace:function(Session, MFA, MatchSpec, [Scope]) of
+        0 ->
+            {error, no_function_matched};
+        _ ->
+            ok
+    end.
+
+trace_processes(_Session, [], _Flags) ->
+    ok;
+trace_processes(Session, [Pid | Rest], Flags) ->
+    try trace:process(Session, Pid, true, Flags) of
+        _ ->
+            trace_processes(Session, Rest, Flags)
+    catch
+        error:badarg ->
+            {error, {noproc, Pid}}
+    end;
+trace_processes(Session, ProcessSet, Flags) ->
+    trace:process(Session, ProcessSet, true, Flags),
+    %% `all' and `existing' include this process, and a tracer tracing itself gets no messages.
+    trace:process(Session, self(), false, [all]),
+    ok.
+
+%% `max_heap_size' does not count an off-heap mailbox, so the tracer checks its own queue.
+tracer_loop(T) ->
+    case erlang:process_info(self(), message_queue_len) of
+        {message_queue_len, Len} when Len > ?TRACE_MAX_MAILBOX ->
+            tracer_stop(T, mailbox_limit);
+        _ ->
+            tracer_receive(T)
+    end.
+
+tracer_receive(#tracer{budget = Budget} = T) ->
+    receive
+        {trace_ts, Pid, call, MFA, Ts} ->
+            tracer_event(T, Pid, Ts, call_event(MFA, Budget));
+        {trace_ts, Pid, call, MFA, Message, Ts} ->
+            {CallMFA, Event} = call_event(MFA, Budget),
+            tracer_event(T, Pid, Ts, {CallMFA, with_message(Event, Message, Budget)});
+        {trace_ts, Pid, return_from, MFA, Value, Ts} ->
+            tracer_event(T, Pid, Ts, {MFA, value_event(return, Value, Budget)});
+        {trace_ts, Pid, exception_from, MFA, Value, Ts} ->
+            tracer_event(T, Pid, Ts, {MFA, value_event(exception, Value, Budget)});
+        voyager_trace_flush ->
+            erlang:send_after(?TRACE_FLUSH_MS, self(), voyager_trace_flush),
+            tracer_loop(send_batch(T));
+        voyager_trace_ttl ->
+            tracer_stop(T, time_limit);
+        voyager_trace_stop ->
+            tracer_stop(T, stopped);
+        {'DOWN', _MRef, process, _Collector, _Reason} ->
+            trace:session_destroy(T#tracer.session);
+        _Other ->
+            tracer_loop(T)
+    end.
+
+call_event({M, F, Args}, Budget) when is_list(Args) ->
+    {Bounded, Truncated} = bound_term(Args, Budget),
+    {{M, F, length(Args)}, #{type => call, args => Bounded, truncated => Truncated}};
+call_event(MFA, _Budget) ->
+    {MFA, #{type => call}}.
+
+with_message(Event, Message, Budget) ->
+    {Bounded, Truncated} = bound_term(Message, Budget),
+    Event#{message => Bounded, truncated => Truncated orelse maps:get(truncated, Event, false)}.
+
+value_event(Type, Value, Budget) ->
+    {Bounded, Truncated} = bound_term(Value, Budget),
+    #{type => Type, value => Bounded, truncated => Truncated}.
+
+tracer_event(#tracer{limits = Limits} = T0, Pid, Ts, {MFA, Event}) ->
+    {Window, Rate} = tick(T0#tracer.window),
+    {Label, Names} = process_label(Pid, T0#tracer.names),
+    At = erlang:convert_time_unit(Ts, nanosecond, microsecond) + erlang:time_offset(microsecond),
+    T = T0#tracer{buffer =
+                      [Event#{pid => Pid, process => Label, mfa => MFA, at => At}
+                       | T0#tracer.buffer],
+                  buffered = T0#tracer.buffered + 1,
+                  events = T0#tracer.events + 1,
+                  window = Window,
+                  names = Names},
+    MaxEvents = maps:get(max_events, Limits, undefined),
+    MaxRate = maps:get(max_rate, Limits, undefined),
+    if
+        is_integer(MaxEvents), T#tracer.events >= MaxEvents ->
+            tracer_stop(T, event_limit);
+        is_integer(MaxRate), Rate > MaxRate ->
+            tracer_stop(T, rate_limit);
+        T#tracer.buffered >= min(?TRACE_BATCH, ?TRACE_BATCH_BUDGET div max(T#tracer.budget, 1)) ->
+            tracer_loop(send_batch(T));
+        true ->
+            tracer_loop(T)
+    end.
+
+tick({Start, Count}) ->
+    Now = erlang:monotonic_time(millisecond),
+    case Now - Start >= 1_000 of
+        true ->
+            {{Now, 1}, 1};
+        false ->
+            {{Start, Count + 1}, Count + 1}
+    end.
+
+process_label(Pid, {Current, Previous} = Names) ->
+    case {Current, Previous} of
+        {#{Pid := Label}, _} ->
+            {Label, Names};
+        {_, #{Pid := Label}} ->
+            {Label, remember_label(Pid, Label, Names)};
+        _ ->
+            Label = lookup_label(Pid),
+            {Label, remember_label(Pid, Label, Names)}
+    end.
+
+%% Two generations: callers seen since the last rotation survive it, cold and dead ones age out.
+remember_label(Pid, Label, {Current, _Previous}) when map_size(Current) >= ?TRACE_NAMES_CAP div 2 ->
+    {#{Pid => Label}, Current};
+remember_label(Pid, Label, {Current, Previous}) ->
+    {Current#{Pid => Label}, Previous}.
+
+lookup_label(Pid) ->
+    case erlang:process_info(Pid, [registered_name, {dictionary, '$initial_call'}, initial_call])
+    of
+        undefined ->
+            undefined;
+        [{registered_name, Name}, _, _] when is_atom(Name) ->
+            Name;
+        [_, {_, {_, _, _} = InitialCall}, _] ->
+            InitialCall;
+        [_, _, {initial_call, InitialCall}] ->
+            InitialCall
+    end.
+
+%% `nosuspend': a busy dist link drops the batch instead of blocking the draining tracer.
+send_batch(#tracer{buffer = []} = T) ->
+    T;
+send_batch(#tracer{collector = Collector,
+                   buffer = Buffer,
+                   buffered = Buffered,
+                   dropped = Dropped} =
+               T) ->
+    Batch = {voyager_trace_events, self(), lists:reverse(Buffer), Dropped},
+    case erlang:send(Collector, Batch, [nosuspend, noconnect]) of
+        ok ->
+            T#tracer{buffer = [], buffered = 0};
+        _ ->
+            T#tracer{buffer = [],
+                     buffered = 0,
+                     dropped = Dropped + Buffered}
+    end.
+
+tracer_stop(#tracer{session = Session, collector = Collector} = T0, Reason) ->
+    trace:session_destroy(Session),
+    #tracer{events = Events, dropped = Dropped} = send_batch(T0),
+    erlang:send(Collector,
+                {voyager_trace_done, self(), Reason, #{events => Events, dropped => Dropped}},
+                [noconnect]),
+    ok.
 
 %% =====================================================================
 %% NODE WATCHER - gen_server callbacks and watcher for Nodes.
