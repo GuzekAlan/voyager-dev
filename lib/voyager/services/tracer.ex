@@ -3,7 +3,7 @@ defmodule Voyager.Services.Tracer do
   Owns the single tracing session of this Voyager instance; the UI and MCP both go through it.
 
   A session is configured once, then switched on and off with `start/0` and
-  `stop/1`; starting a stopped session resumes it. The tracer on the remote node
+  `stop/0`; starting a stopped session resumes it. The tracer on the remote node
   pushes event batches straight to this process. The newest events are kept in
   memory and everything is broadcast on `topic/0` as
   `{:tracing_configured, session}`, `{:tracing_started, session}`,
