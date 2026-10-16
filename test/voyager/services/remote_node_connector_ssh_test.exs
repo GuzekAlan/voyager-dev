@@ -72,7 +72,7 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
       ctx.ssh_host,
       Keyword.get(overrides, :node_name, Atom.to_string(ctx.peer_node)),
       Keyword.get(overrides, :cookie, @cookie),
-      {:password, Keyword.get(overrides, :password, SshServer.password())},
+      {:password, SshServer.password()},
       ssh_port: ctx.ssh_port
     )
   end
@@ -100,11 +100,6 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
     :ssh.stop_daemon(ctx.daemon)
 
     assert_receive {:tunnel_down, ^conn_ref}, 5_000
-  end
-
-  test "fails with a wrong SSH password", ctx do
-    assert {:error, ~c"Unable to connect using the available authentication methods"} =
-             connect(ctx, password: "wrong")
   end
 
   test "fails when the node is not registered in the remote epmd", ctx do
