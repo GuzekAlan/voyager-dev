@@ -52,6 +52,7 @@ defmodule Voyager.Services.Tracer.ConfigTest do
   test "requires valid pids when tracing selected processes" do
     assert %{pids: [_]} = errors(%{@valid | pids: []})
     assert %{pids: [_]} = errors(%{@valid | pids: ["not a pid"]})
+    assert %{pids: [_]} = errors(%{@valid | pids: [nil]})
 
     assert {:ok, _config} =
              apply_attrs(Map.merge(@valid, %{pids: [], processes: :all}))

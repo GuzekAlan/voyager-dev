@@ -116,11 +116,20 @@ defmodule Voyager.Services.Tracer.Config do
     pids = get_field(changeset, :pids)
 
     cond do
-      get_field(changeset, :processes) != :pids -> changeset
-      pids == [] -> add_error(changeset, :pids, "can't be blank")
-      length(pids) > @max_pids -> add_error(changeset, :pids, "at most #{@max_pids} pids")
-      nil in parse_pids(pids) -> add_error(changeset, :pids, "must be pids like <123.45.0>")
-      true -> changeset
+      get_field(changeset, :processes) != :pids ->
+        changeset
+
+      pids == [] ->
+        add_error(changeset, :pids, "can't be blank")
+
+      length(pids) > @max_pids ->
+        add_error(changeset, :pids, "at most #{@max_pids} pids")
+
+      not Enum.all?(pids, &pid_string?/1) ->
+        add_error(changeset, :pids, "must be pids like <123.45.0>")
+
+      true ->
+        changeset
     end
   end
 
@@ -147,5 +156,5 @@ defmodule Voyager.Services.Tracer.Config do
   defp hot?(module),
     do: module in Enum.map(@hot, &Atom.to_string/1) or String.starts_with?(module, @hot_prefixes)
 
-  defp parse_pids(pids), do: Enum.map(pids, &Voyager.Pid.parse/1)
+  defp pid_string?(pid), do: is_binary(pid) and Voyager.Pid.parse(pid) != nil
 end
