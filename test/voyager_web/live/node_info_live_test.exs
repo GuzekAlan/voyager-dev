@@ -31,6 +31,18 @@ defmodule VoyagerWeb.NodeInfoLiveTest do
       assert has_element?(view, "#mcp-status")
     end
 
+    test "names the connector in the connection status label", %{conn: conn} do
+      stub_erpc(Fakes.node_data())
+
+      {:ok, view, _html} = live(conn, @path)
+      assert has_element?(view, "#node-status-label", "Connected directly")
+
+      Fakes.put_session(Fakes.node_session(node_name: @node_name, connector: SshConnector))
+
+      {:ok, view, _html} = live(conn, @path)
+      assert has_element?(view, "#node-status-label", "Connected via SSH")
+    end
+
     test "shows the feedback link", %{conn: conn} do
       stub_erpc(Fakes.node_data())
 
