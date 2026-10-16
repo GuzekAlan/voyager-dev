@@ -28,9 +28,7 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
       )
     end
 
-    previous_tcp_module = :inet_db.tcp_module()
     :inet_db.set_tcp_module(Voyager.Test.DualTcp)
-    on_exit(fn -> :inet_db.set_tcp_module(previous_tcp_module) end)
   end
 
   setup ctx do
