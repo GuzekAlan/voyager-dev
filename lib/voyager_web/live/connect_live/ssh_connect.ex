@@ -10,11 +10,22 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   alias Voyager.Queries.SshConnections, as: SshConnectionQueries
   alias Voyager.Services.SSH.KeyFile
   alias VoyagerWeb.ConnectComponents
+  alias VoyagerWeb.ConnectLive.ConnectError
   alias VoyagerWeb.ConnectLive.RecentConnections
   alias VoyagerWeb.ConnectLive.SecretVisibility
   alias VoyagerWeb.FormSchemas.SshConnectionParams
 
   @id_prefix "ssh-"
+  @ssh_host_errors [
+    :etimedout,
+    :econnrefused,
+    :nxdomain,
+    :ehostunreach,
+    :enetunreach,
+    :enetdown,
+    :ehostdown
+  ]
+
   @impl true
   def mount(socket) do
     socket
@@ -26,12 +37,11 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   def update(assigns, socket) when not is_map_key(socket.assigns, :initialized) do
     socket
     |> assign(:id, assigns.id)
-    |> assign(:connected?, assigns.connected?)
+    |> assign(:disabled?, assigns.disabled?)
+    |> assign(:connecting?, assigns.connecting?)
     |> assign(:ssh_form, empty_ssh_form())
     |> SecretVisibility.init()
     |> assign(:show_ssh_advanced, false)
-    |> assign(:ssh_connecting, false)
-    |> assign(:ssh_last_applied, nil)
     |> assign(:passphrase_form, nil)
     |> assign(:key_passphrase, nil)
     |> RecentConnections.init(
@@ -45,7 +55,8 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   def update(assigns, socket) do
     socket
     |> assign(:id, assigns.id)
-    |> assign(:connected?, assigns.connected?)
+    |> assign(:disabled?, assigns.disabled?)
+    |> assign(:connecting?, assigns.connecting?)
     |> ok()
   end
 
@@ -64,7 +75,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
         phx-target={@myself}
         phx-change="validate_ssh"
         phx-submit="connect_ssh"
-        class={["flex flex-col gap-4", (@connected? or @ssh_connecting) && "pointer-events-none"]}
+        class={["flex flex-col gap-4", @disabled? && "pointer-events-none"]}
       >
         <div class="flex gap-3">
           <div class="min-w-0 flex-1">
@@ -72,7 +83,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
               field={@ssh_form[:ssh_user]}
               label="SSH User"
               placeholder="voyager"
-              disabled={@connected? or @ssh_connecting}
+              disabled={@disabled?}
             />
           </div>
           <div class="flex-2 min-w-0">
@@ -80,7 +91,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
               field={@ssh_form[:ssh_host]}
               label="SSH Host"
               placeholder="10.0.0.5"
-              disabled={@connected? or @ssh_connecting}
+              disabled={@disabled?}
             />
           </div>
         </div>
@@ -93,13 +104,13 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
               do: "my_app@server.company.com",
               else: "my_app@my-machine"
           }
-          disabled={@connected? or @ssh_connecting}
+          disabled={@disabled?}
         >
           <:trailing>
             <ConnectComponents.name_type_toggle
               name="ssh[name_type]"
               value={@current_name_type}
-              disabled={@connected? or @ssh_connecting}
+              disabled={@disabled?}
             />
           </:trailing>
         </ConnectComponents.form_field>
@@ -113,7 +124,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
           remember_name="ssh[remember_cookie]"
           remember_checked={to_string(@ssh_form[:remember_cookie].value) == "true"}
           remember_label="Remember cookie"
-          disabled={@connected? or @ssh_connecting}
+          disabled={@disabled?}
         />
 
         <div>
@@ -123,7 +134,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
           <ConnectComponents.segmented
             name="ssh[auth_method]"
             value={@current_auth_method}
-            disabled={@connected? or @ssh_connecting}
+            disabled={@disabled?}
             options={[
               %{value: "agent", label: "SSH Agent", id: "ssh-auth-agent"},
               %{value: "password", label: "Password", id: "ssh-auth-password"},
@@ -142,7 +153,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
           remember_name="ssh[remember_password]"
           remember_checked={to_string(@ssh_form[:remember_password].value) == "true"}
           remember_label="Remember password"
-          disabled={@connected? or @ssh_connecting}
+          disabled={@disabled?}
         />
 
         <ConnectComponents.path_field
@@ -150,7 +161,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
           field={@ssh_form[:key_path]}
           label="Identity file"
           placeholder="~/.ssh/id_ed25519"
-          disabled={@connected? or @ssh_connecting}
+          disabled={@disabled?}
         />
 
         <div>
@@ -174,7 +185,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
                 type="number"
                 min="1"
                 max="65535"
-                disabled={@connected? or @ssh_connecting}
+                disabled={@disabled?}
               />
             </div>
             <div class="flex-1">
@@ -184,7 +195,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
                 type="number"
                 min="1"
                 max="65535"
-                disabled={@connected? or @ssh_connecting}
+                disabled={@disabled?}
               />
             </div>
           </div>
@@ -195,8 +206,8 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
           icon="icon-network"
           label="Connect via SSH"
           loading_label="Connecting over SSH…"
-          loading={@ssh_connecting}
-          disabled={@connected? or @ssh_connecting}
+          loading={@connecting?}
+          disabled={@disabled?}
         />
       </.form>
 
@@ -204,14 +215,14 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
         id_prefix={@id_prefix}
         pinned_connections={@pinned_connections}
         recent_connections={@recent_connections}
-        disabled={@connected? or @ssh_connecting}
+        disabled={@disabled?}
       >
         <:row :let={{conn, pinned}}>
           <.ssh_connection_row
             conn={conn}
             pinned={pinned}
             target={@myself}
-            disabled={@connected? or @ssh_connecting}
+            disabled={@disabled?}
           />
         </:row>
       </RecentConnections.render>
@@ -224,7 +235,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
         :if={@passphrase_form}
         id={"#{@id_prefix}passphrase-modal"}
         form={@passphrase_form}
-        key_path={@ssh_last_applied.key_path}
+        key_path={@ssh_form[:key_path].value}
         shown={SecretVisibility.shown?(@secret_visibility, "passphrase")}
         target={@myself}
         on_change="change_passphrase"
@@ -295,10 +306,6 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     {:noreply, update(socket, :show_ssh_advanced, &(!&1))}
   end
 
-  def handle_event("connect_ssh", _, %{assigns: %{ssh_connecting: true}} = socket) do
-    {:noreply, socket}
-  end
-
   def handle_event("connect_ssh", %{"ssh" => params}, socket) do
     changeset = params |> SshConnectionParams.changeset() |> add_key_file_error()
 
@@ -326,15 +333,14 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
         %{"passphrase" => %{"passphrase" => passphrase, "remember" => remember}},
         socket
       ) do
-    p = %{
-      socket.assigns.ssh_last_applied
-      | passphrase: passphrase,
-        remember_passphrase: remember == "true"
-    }
+    p =
+      socket.assigns.ssh_form.params
+      |> SshConnectionParams.changeset()
+      |> Ecto.Changeset.apply_changes()
 
     socket
     |> assign(:passphrase_form, nil)
-    |> connect_or_prompt(p)
+    |> connect_or_prompt(%{p | passphrase: passphrase, remember_passphrase: remember == "true"})
     |> noreply()
   end
 
@@ -342,11 +348,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     {:noreply, assign(socket, :passphrase_form, nil)}
   end
 
-  def handle_event("fill_ssh_recent", _params, %{assigns: %{connected?: true}} = socket) do
-    {:noreply, socket}
-  end
-
-  def handle_event("fill_ssh_recent", _params, %{assigns: %{ssh_connecting: true}} = socket) do
+  def handle_event("fill_ssh_recent", _params, %{assigns: %{disabled?: true}} = socket) do
     {:noreply, socket}
   end
 
@@ -373,71 +375,31 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   end
 
   @impl true
-  def handle_async(:ssh_connect, {:ok, :ok}, socket) do
-    case NodeSession.current() do
-      nil ->
-        socket
-        |> finish_connecting()
-        |> assign(:ssh_form, error_form(socket.assigns.ssh_last_applied, :connection_lost))
-        |> noreply()
-
-      session ->
-        persist_connection(socket.assigns.ssh_last_applied)
-
-        socket
-        |> assign(:ssh_connecting, false)
-        |> redirect(to: ~p"/node/#{session.node_name}")
-        |> noreply()
-    end
-  end
-
   def handle_async(:ssh_connect, {:ok, {:error, reason}}, socket) do
-    socket
-    |> finish_connecting()
-    |> assign(:ssh_form, error_form(socket.assigns.ssh_last_applied, reason))
-    |> noreply()
+    {:noreply, put_connect_error(socket, reason)}
   end
 
   def handle_async(:ssh_connect, {:exit, _reason}, socket) do
-    socket
-    |> finish_connecting()
-    |> assign(:ssh_form, error_form(socket.assigns.ssh_last_applied, :unexpected_exit))
-    |> noreply()
+    {:noreply, put_connect_error(socket, :unexpected_exit)}
   end
 
-  defp start_ssh_connect(socket, %SshConnectionParams{} = p) do
-    send(self(), {:ssh_connecting, true})
-
-    socket
-    |> assign(:ssh_connecting, true)
-    |> assign(:ssh_last_applied, p)
-    |> start_async(:ssh_connect, fn ->
-      NodeSession.connect_via(SshConnector, p.node_name, p.cookie,
-        ssh_user: p.ssh_user,
-        ssh_host: p.ssh_host,
-        auth: SshConnectionParams.to_auth(p),
-        ssh_port: p.ssh_port,
-        epmd_port: p.epmd_port,
-        name_type: p.name_type
-      )
-    end)
+  def handle_async(:ssh_connect, {:ok, :ok}, socket) do
+    {:noreply, redirect(socket, to: ~p"/open")}
   end
 
   defp connect_or_prompt(socket, %SshConnectionParams{auth_method: :key} = p) do
     case KeyFile.check(p.key_path, p.passphrase) do
       {:error, reason} when reason in [:key_passphrase_required, :key_bad_passphrase] ->
-        socket
-        |> assign(:ssh_last_applied, p)
-        |> assign(:passphrase_form, passphrase_form(reason, p.remember_passphrase))
+        assign(socket, :passphrase_form, passphrase_form(reason, p.remember_passphrase))
 
       _ ->
         socket
         |> assign(:key_passphrase, p.passphrase && {p.key_path, p.passphrase})
-        |> start_ssh_connect(p)
+        |> start_async(:ssh_connect, fn -> connect(p) end)
     end
   end
 
-  defp connect_or_prompt(socket, p), do: start_ssh_connect(socket, p)
+  defp connect_or_prompt(socket, p), do: start_async(socket, :ssh_connect, fn -> connect(p) end)
 
   defp passphrase_form(reason, remember) do
     errors =
@@ -449,9 +411,20 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   defp key_passphrase({path, passphrase}, path), do: passphrase
   defp key_passphrase(_saved, _path), do: nil
 
-  defp finish_connecting(socket) do
-    send(self(), {:ssh_connecting, false})
-    assign(socket, :ssh_connecting, false)
+  defp connect(%SshConnectionParams{} = p) do
+    opts = [
+      ssh_user: p.ssh_user,
+      ssh_host: p.ssh_host,
+      auth: SshConnectionParams.to_auth(p),
+      ssh_port: p.ssh_port,
+      epmd_port: p.epmd_port,
+      name_type: p.name_type
+    ]
+
+    with :ok <- NodeSession.connect_via(SshConnector, p.node_name, p.cookie, opts) do
+      persist_connection(p)
+      :ok
+    end
   end
 
   defp persist_connection(%SshConnectionParams{} = p) do
@@ -481,8 +454,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
         changeset
 
       {:error, reason} ->
-        {field, msg} = ssh_connect_error(reason)
-        Ecto.Changeset.add_error(changeset, field, msg)
+        Ecto.Changeset.add_error(changeset, error_field(reason), ConnectError.message(reason))
     end
   end
 
@@ -513,87 +485,26 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     SshConnectionParams.changeset() |> to_form(as: :ssh)
   end
 
-  defp error_form(nil, _reason), do: empty_ssh_form()
+  defp put_connect_error(socket, reason) do
+    form =
+      socket.assigns.ssh_form.params
+      |> SshConnectionParams.changeset()
+      |> Ecto.Changeset.add_error(error_field(reason), ConnectError.message(reason))
+      |> Map.put(:action, :insert)
+      |> to_form(as: :ssh)
 
-  defp error_form(%SshConnectionParams{} = p, reason) do
-    {field, msg} = ssh_connect_error(reason)
-
-    p
-    |> Ecto.Changeset.change()
-    |> Ecto.Changeset.add_error(field, msg)
-    |> Map.put(:action, :insert)
-    |> to_form(as: :ssh)
+    assign(socket, :ssh_form, form)
   end
 
-  defp ssh_connect_error({:invalid_node_name, _}), do: {:node_name, "Use the name@host format"}
+  defp error_field({:invalid_host, _}), do: :ssh_host
+  defp error_field(reason) when is_list(reason), do: :ssh_user
 
-  defp ssh_connect_error({:invalid_host, _}),
-    do: {:ssh_host, "Invalid host — check the SSH hostname"}
+  defp error_field(reason) when reason in @ssh_host_errors, do: :ssh_host
 
-  defp ssh_connect_error(reason) when is_list(reason),
-    do:
-      {:ssh_user,
-       "SSH authentication failed — check your credentials or ensure the SSH agent is running"}
+  defp error_field(reason) when reason in [:key_encrypted_openssh, :key_unreadable],
+    do: :key_path
 
-  defp ssh_connect_error(:etimedout),
-    do: {:ssh_host, "Connection timed out — check the SSH host and port"}
-
-  defp ssh_connect_error(:econnrefused),
-    do: {:ssh_host, "Connection refused — check the SSH host and port"}
-
-  defp ssh_connect_error(:nxdomain),
-    do: {:ssh_host, "Host not found — check the SSH hostname"}
-
-  defp ssh_connect_error(reason)
-       when reason in [:ehostunreach, :enetunreach, :enetdown, :ehostdown],
-       do: {:ssh_host, "Host unreachable — check the SSH hostname and your network"}
-
-  defp ssh_connect_error({:node_not_found, _, _}),
-    do:
-      {:node_name,
-       "Node not found on remote epmd — check the node name, or set a custom EPMD port in Advanced"}
-
-  defp ssh_connect_error(:invalid_epmd_response),
-    do: {:node_name, "Unexpected response from remote epmd — check the EPMD port in Advanced"}
-
-  defp ssh_connect_error(:node_connect_failed),
-    do: {:cookie, "Handshake failed — the Erlang cookie does not match"}
-
-  defp ssh_connect_error(:not_distributed),
-    do: {:node_name, "Failed to start local Erlang distribution"}
-
-  defp ssh_connect_error({:net_kernel, _}),
-    do: {:node_name, "Failed to start local Erlang distribution"}
-
-  defp ssh_connect_error({:net_kernel_stop, _}),
-    do: {:node_name, "Failed to restart local Erlang distribution"}
-
-  defp ssh_connect_error(:invalid_name_type),
-    do: {:node_name, "Invalid name type"}
-
-  defp ssh_connect_error(:connection_lost),
-    do: {:node_name, "Connection was lost before it completed — please try again"}
-
-  defp ssh_connect_error(:unexpected_exit),
-    do: {:node_name, "Connection attempt failed unexpectedly"}
-
-  defp ssh_connect_error({:agent_install_failed, {:otp_too_old, release}}),
-    do:
-      {:node_name,
-       "Node runs OTP #{release} - Voyager requires OTP #{Voyager.Agent.min_otp()} or newer"}
-
-  defp ssh_connect_error({:agent_install_failed, _}),
-    do: {:node_name, "Could not load the Voyager agent on the node"}
-
-  defp ssh_connect_error(:key_encrypted_openssh),
-    do:
-      {:key_path,
-       "Passphrase-protected OpenSSH keys aren't supported — use SSH Agent or Password"}
-
-  defp ssh_connect_error(:key_unreadable),
-    do: {:key_path, "Not a private key Voyager can read"}
-
-  defp ssh_connect_error({:read_failed, _}), do: {:key_path, "Can't read this file"}
-
-  defp ssh_connect_error(_), do: {:node_name, "Could not connect to remote node"}
+  defp error_field({:read_failed, _}), do: :key_path
+  defp error_field(:node_connect_failed), do: :cookie
+  defp error_field(_reason), do: :node_name
 end

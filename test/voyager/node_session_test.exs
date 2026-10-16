@@ -89,6 +89,7 @@ defmodule Voyager.NodeSessionTest do
                NodeSession.current()
 
       assert NodeSession.connected?()
+      assert_receive {:node_connecting, "demo@localhost"}
       assert_receive {:node_connected, ^node}
     end
 
@@ -134,6 +135,8 @@ defmodule Voyager.NodeSessionTest do
                NodeSession.connect_via(FakeConnector, "demo@localhost", "secret", fail: :boom)
 
       refute NodeSession.connected?()
+      assert_receive {:node_connecting, "demo@localhost"}
+      assert_receive {:node_connect_failed, "demo@localhost", :boom}
     end
 
     test "emits connect_failed telemetry with connector and reason on failure" do

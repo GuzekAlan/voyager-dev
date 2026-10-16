@@ -92,6 +92,7 @@ defmodule Voyager.NodeSession do
 
   def handle_call({:connect, connector, node_name, cookie, opts}, _from, %{session: nil} = state) do
     monitor_nodes(true)
+    broadcast({:node_connecting, node_name})
 
     case connect_and_install(connector, node_name, cookie, opts) do
       {:ok, node, meta} ->
@@ -119,6 +120,7 @@ defmodule Voyager.NodeSession do
 
       {:error, reason} = err ->
         monitor_nodes(false)
+        broadcast({:node_connect_failed, node_name, reason})
 
         Voyager.Telemetry.dispatch!("voyager.node.connect_failed",
           metadata: %{connected_via: connector.name(), reason: reason}

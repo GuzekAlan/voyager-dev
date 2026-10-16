@@ -18,6 +18,7 @@ defmodule Voyager.Services.SSH.Erlssh do
         user: String.to_charlist(user),
         user_interaction: false,
         silently_accept_hosts: true,
+        save_accepted_host: false,
         connect_timeout: @ssh_timeout
       ] ++ auth_opts(auth)
 
