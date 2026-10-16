@@ -82,6 +82,40 @@ defmodule VoyagerWeb.ConnectLiveTest do
     end
   end
 
+  describe "connect status" do
+    test "disables the form while connecting and flashes a failure started elsewhere", %{
+      conn: conn
+    } do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      send(view.pid, {:node_connecting, "demo@localhost"})
+      assert has_element?(view, ~s|#direct-connect-btn[disabled]|)
+
+      send(view.pid, {:node_connect_failed, "demo@localhost", :bad_cookie})
+      assert has_element?(view, ~s|#direct-connect-btn:not([disabled])|)
+      assert has_element?(view, "#flash-error", "Authentication failed")
+    end
+
+    test "shows the failure on the form that started the connect", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/?mode=ssh")
+
+      view
+      |> element("#ssh-connect-form")
+      |> render_submit(%{
+        "ssh" => %{
+          "ssh_user" => "deploy",
+          "ssh_host" => "gw",
+          "node_name" => "demo@localhost",
+          "cookie" => "secret"
+        }
+      })
+
+      render_async(view)
+
+      assert has_element?(view, "#ssh_node_name.input-error")
+    end
+  end
+
   describe "fill_recent while connected" do
     test "does not fill the form when a session is active", %{conn: conn} do
       {:ok, recent} =
@@ -128,7 +162,7 @@ defmodule VoyagerWeb.ConnectLiveTest do
 
       assert has_element?(view, "a#connect-tutorial-link.text-primary")
 
-      send(view.pid, {:ssh_connecting, true})
+      send(view.pid, {:node_connecting, "demo@localhost"})
 
       assert has_element?(view, ~s|a#connect-tutorial-link[class~="text-base-content/50"]|)
       refute has_element?(view, "a#connect-tutorial-link.text-primary")
