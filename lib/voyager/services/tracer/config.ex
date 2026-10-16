@@ -8,19 +8,12 @@ defmodule Voyager.Services.Tracer.Config do
 
   import Ecto.Changeset
 
+  alias Voyager.Services.Tracer.Refusals
+
   @limits [:max_events, :max_rate, :max_time_ms]
   @max_time_ms 3_600_000
   @max_budget 100_000
   @max_pids 100
-  @always_refused [:trace]
-  # Called from nearly every process: an all-process call trace on them floods the tracer.
-  @hot ~w(erlang lists maps ets gen gen_server gen_statem gen_event proc_lib io io_lib logger
-          timer code erl_eval Elixir.Enum Elixir.Map Elixir.Kernel Elixir.String Elixir.GenServer
-          erpc rpc gen_tcp inet ssl net_kernel dist_util proplists persistent_term unicode binary
-          telemetry Elixir.Keyword Elixir.Access Elixir.Enumerable Elixir.List)a
-  @hot_prefixes ["prim_", "erts_"]
-  @refused_actions ~w(trace enable_trace disable_trace silent set_seq_token process_dump display
-                      current_stacktrace caller_line set_tcw return_trace exception_trace)a
 
   @primary_key false
   embedded_schema do
@@ -81,20 +74,6 @@ defmodule Voyager.Services.Tracer.Config do
     {spec, limits}
   end
 
-  @doc """
-  The refusal lists the agent is compiled with, so the agent and this changeset refuse the same.
-  Changing them does not rename the agent, so nodes that already loaded it keep the old lists.
-  """
-  @spec agent_macros() :: keyword()
-  def agent_macros do
-    [
-      TRACE_ALWAYS_REFUSED: @always_refused,
-      TRACE_HOT: @hot,
-      TRACE_HOT_PREFIXES: Enum.map(@hot_prefixes, &String.to_charlist/1),
-      TRACE_REFUSED_ACTIONS: @refused_actions
-    ]
-  end
-
   # `trace:function/4` takes '_' only in the rightmost fields.
   defp validate_wildcard_arity(changeset) do
     if get_field(changeset, :function) == "_" and get_field(changeset, :arity) != nil do
@@ -137,24 +116,22 @@ defmodule Voyager.Services.Tracer.Config do
     module = get_field(changeset, :module)
 
     cond do
-      module in Enum.map([Voyager.Agent.module() | @always_refused], &Atom.to_string/1) ->
+      is_nil(module) ->
+        changeset
+
+      module == Atom.to_string(Voyager.Agent.module()) or Refusals.always_refused?(module) ->
         add_error(changeset, :module, "cannot be traced")
 
       get_field(changeset, :processes) == :pids ->
         changeset
 
-      hot?(module) ->
+      Refusals.hot?(module) ->
         add_error(changeset, :module, "is too hot to trace on all processes, select pids")
 
       true ->
         changeset
     end
   end
-
-  defp hot?(nil), do: false
-
-  defp hot?(module),
-    do: module in Enum.map(@hot, &Atom.to_string/1) or String.starts_with?(module, @hot_prefixes)
 
   defp pid_string?(pid), do: is_binary(pid) and Voyager.Pid.parse(pid) != nil
 end
