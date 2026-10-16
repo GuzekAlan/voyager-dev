@@ -426,9 +426,10 @@ defmodule VoyagerWeb.Components.Shell do
       </span>
       <span
         :if={!@long_node_name?}
+        id="node-status-label"
         class="text-base-content/70 shrink-0 text-xs @max-[20rem]/nav-status:hidden"
       >
-        Connected
+        {connected_label(@session.connector.name())}
       </span>
       <span
         class={["font-mono text-base-content/80 min-w-0 truncate text-xs"]}
@@ -451,4 +452,7 @@ defmodule VoyagerWeb.Components.Shell do
     </div>
     """
   end
+
+  defp connected_label(:ssh), do: "Connected via SSH"
+  defp connected_label(_connector), do: "Connected directly"
 end
