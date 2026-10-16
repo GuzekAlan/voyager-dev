@@ -6,7 +6,18 @@ defmodule Voyager.MCP.Server do
   use Anubis.Server,
     name: "Voyager",
     version: Voyager.version(),
+    icons: [
+      %{
+        "src" =>
+          "data:image/png;base64," <>
+            Base.encode64(File.read!(Path.expand("../../../priv/mcp/icon.png", __DIR__))),
+        "mimeType" => "image/png",
+        "sizes" => ["48x48"]
+      }
+    ],
     capabilities: [:tools]
+
+  @external_resource Path.expand("../../../priv/mcp/icon.png", __DIR__)
 
   component(Voyager.MCP.Tools.NodeInfo)
   component(Voyager.MCP.Tools.ProcessList)
