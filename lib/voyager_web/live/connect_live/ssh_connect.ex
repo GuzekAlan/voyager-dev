@@ -8,9 +8,9 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   alias Voyager.NodeSession
   alias Voyager.NodeSession.Connectors.Ssh, as: SshConnector
   alias Voyager.Queries.SshConnections, as: SshConnectionQueries
-  alias Voyager.Services.SSH.KeyFile
   alias VoyagerWeb.ConnectComponents
   alias VoyagerWeb.ConnectLive.ConnectError
+  alias VoyagerWeb.ConnectLive.KeyAuth
   alias VoyagerWeb.ConnectLive.RecentConnections
   alias VoyagerWeb.ConnectLive.SecretVisibility
   alias VoyagerWeb.FormSchemas.SshConnectionParams
@@ -41,9 +41,8 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     |> assign(:connecting?, assigns.connecting?)
     |> assign(:ssh_form, empty_ssh_form())
     |> SecretVisibility.init()
+    |> KeyAuth.init()
     |> assign(:show_ssh_advanced, false)
-    |> assign(:passphrase_form, nil)
-    |> assign(:key_passphrase, nil)
     |> RecentConnections.init(
       queries: SshConnectionQueries,
       actions: SshConnectionActions
@@ -299,7 +298,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   @impl true
   def handle_event("validate_ssh", %{"ssh" => params}, socket) do
     changeset = SshConnectionParams.changeset(params)
-    {:noreply, assign(socket, :ssh_form, key_checked_form(changeset))}
+    {:noreply, assign(socket, :ssh_form, KeyAuth.checked_form(changeset))}
   end
 
   def handle_event("toggle_ssh_advanced", _, socket) do
@@ -307,25 +306,18 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
   end
 
   def handle_event("connect_ssh", %{"ssh" => params}, socket) do
-    changeset = params |> SshConnectionParams.changeset() |> add_key_file_error()
+    changeset = params |> SshConnectionParams.changeset() |> KeyAuth.add_error()
 
     case Ecto.Changeset.apply_action(changeset, :insert) do
       {:ok, %SshConnectionParams{} = p} ->
         socket
         |> assign(:ssh_form, to_form(changeset, as: :ssh))
-        |> connect_or_prompt(%{
-          p
-          | passphrase: key_passphrase(socket.assigns.key_passphrase, p.key_path)
-        })
+        |> KeyAuth.connect(p, &start_connect/2)
         |> noreply()
 
       {:error, changeset} ->
         {:noreply, assign(socket, :ssh_form, to_form(changeset, as: :ssh))}
     end
-  end
-
-  def handle_event("change_passphrase", %{"passphrase" => params}, socket) do
-    {:noreply, assign(socket, :passphrase_form, to_form(params, as: :passphrase))}
   end
 
   def handle_event(
@@ -339,13 +331,11 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
       |> Ecto.Changeset.apply_changes()
 
     socket
-    |> assign(:passphrase_form, nil)
-    |> connect_or_prompt(%{p | passphrase: passphrase, remember_passphrase: remember == "true"})
+    |> KeyAuth.connect(
+      %{p | passphrase: passphrase, remember_passphrase: remember == "true"},
+      &start_connect/2
+    )
     |> noreply()
-  end
-
-  def handle_event("cancel_passphrase", _params, socket) do
-    {:noreply, assign(socket, :passphrase_form, nil)}
   end
 
   def handle_event("fill_ssh_recent", _params, %{assigns: %{disabled?: true}} = socket) do
@@ -368,8 +358,8 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
       }
 
       socket
-      |> assign(:ssh_form, key_checked_form(SshConnectionParams.changeset(params)))
-      |> assign(:key_passphrase, conn.passphrase && {conn.key_path, conn.passphrase})
+      |> assign(:ssh_form, KeyAuth.checked_form(SshConnectionParams.changeset(params)))
+      |> KeyAuth.restore(conn)
       |> SecretVisibility.reset()
     end)
   end
@@ -387,29 +377,8 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     {:noreply, redirect(socket, to: ~p"/open")}
   end
 
-  defp connect_or_prompt(socket, %SshConnectionParams{auth_method: :key} = p) do
-    case KeyFile.check(p.key_path, p.passphrase) do
-      {:error, reason} when reason in [:key_passphrase_required, :key_bad_passphrase] ->
-        assign(socket, :passphrase_form, passphrase_form(reason, p.remember_passphrase))
-
-      _ ->
-        socket
-        |> assign(:key_passphrase, p.passphrase && {p.key_path, p.passphrase})
-        |> start_async(:ssh_connect, fn -> connect(p) end)
-    end
-  end
-
-  defp connect_or_prompt(socket, p), do: start_async(socket, :ssh_connect, fn -> connect(p) end)
-
-  defp passphrase_form(reason, remember) do
-    errors =
-      if reason == :key_bad_passphrase, do: [passphrase: {"Wrong passphrase", []}], else: []
-
-    to_form(%{"remember" => to_string(remember)}, as: :passphrase, errors: errors)
-  end
-
-  defp key_passphrase({path, passphrase}, path), do: passphrase
-  defp key_passphrase(_saved, _path), do: nil
+  defp start_connect(socket, %SshConnectionParams{} = p),
+    do: start_async(socket, :ssh_connect, fn -> connect(p) end)
 
   defp connect(%SshConnectionParams{} = p) do
     opts = [
@@ -442,31 +411,6 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
       epmd_port: p.epmd_port
     )
   end
-
-  defp key_checked_form(changeset) do
-    form = to_form(changeset, as: :ssh)
-    %{form | errors: add_key_file_error(changeset).errors -- changeset.errors}
-  end
-
-  defp add_key_file_error(changeset) do
-    case changeset |> Ecto.Changeset.apply_changes() |> check_key_file() do
-      :ok ->
-        changeset
-
-      {:error, reason} ->
-        Ecto.Changeset.add_error(changeset, error_field(reason), ConnectError.message(reason))
-    end
-  end
-
-  defp check_key_file(%SshConnectionParams{auth_method: :key, key_path: path})
-       when is_binary(path) do
-    case KeyFile.check(path, nil) do
-      {:error, :key_passphrase_required} -> :ok
-      result -> result
-    end
-  end
-
-  defp check_key_file(%SshConnectionParams{}), do: :ok
 
   defp with_ssh_connection(socket, id, fun) do
     case Integer.parse(id) do
@@ -501,10 +445,6 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
 
   defp error_field(reason) when reason in @ssh_host_errors, do: :ssh_host
 
-  defp error_field(reason) when reason in [:key_encrypted_openssh, :key_unreadable],
-    do: :key_path
-
-  defp error_field({:read_failed, _}), do: :key_path
   defp error_field(:node_connect_failed), do: :cookie
   defp error_field(_reason), do: :node_name
 end
