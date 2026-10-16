@@ -10,6 +10,7 @@
     "core:default",
     "core:webview:allow-set-webview-zoom",
     "opener:default",
+    "dialog:allow-open",
     "allow-os-theme"
   ]
 }

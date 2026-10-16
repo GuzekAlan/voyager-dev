@@ -181,6 +181,59 @@ defmodule VoyagerWeb.ConnectComponents do
 
   attr :field, Phoenix.HTML.FormField, required: true
   attr :label, :string, required: true
+  attr :placeholder, :string, default: nil
+  attr :disabled, :boolean, default: false
+
+  def path_field(assigns) do
+    ~H"""
+    <.form_field field={@field} label={@label} placeholder={@placeholder} disabled={@disabled}>
+      <:trailing>
+        <.tooltip id={"#{@field.id}-browse-tip"} show_when="browser">
+          <button
+            type="button"
+            id={"#{@field.id}-browse"}
+            phx-hook=".PathField"
+            data-input-id={@field.id}
+            data-default-path={Path.expand("~/.ssh")}
+            data-locked={@disabled}
+            disabled
+            class="btn btn-soft btn-xs font-mono gap-1.5 text-xs"
+          >
+            <.icon name="icon-folder-open" class="size-3.5" /> Browse
+          </button>
+          <:content>Browsing is available only in the desktop app</:content>
+        </.tooltip>
+      </:trailing>
+    </.form_field>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".PathField">
+      export default {
+        mounted() {
+          this.invoke = window.__TAURI_INTERNALS__?.invoke
+          this.sync()
+          this.el.addEventListener("click", async () => {
+            const {inputId, defaultPath} = this.el.dataset
+            const path = await this.invoke("plugin:dialog|open", {options: {defaultPath}})
+            if (typeof path !== "string") return
+
+            const input = document.getElementById(inputId)
+            input.value = path
+            input.dispatchEvent(new Event("input", {bubbles: true}))
+          })
+        },
+        updated() {
+          this.sync()
+        },
+        sync() {
+          this.el.disabled = !this.invoke || "locked" in this.el.dataset
+        }
+      }
+    </script>
+    """
+  end
+
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, required: true
 
   attr :secret_key, :string,
     required: true,

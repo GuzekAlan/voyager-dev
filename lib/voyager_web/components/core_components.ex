@@ -184,7 +184,7 @@ defmodule VoyagerWeb.CoreComponents do
       <div
         phx-click={close_select(@id)}
         class={[
-          "dropdown-content bg-base-100 rounded-box border-base-300 z-50 flex w-max min-w-full flex-col border p-2 shadow-lg",
+          "dropdown-content bg-base-100 rounded-box border-base-300 z-30 flex w-max min-w-full flex-col border p-2 shadow-lg",
           @side == :top && "mb-1",
           @side == :bottom && "mt-1"
         ]}
@@ -415,6 +415,40 @@ defmodule VoyagerWeb.CoreComponents do
     >
       <.display_pid pid={@pid} />
     </.link>
+    """
+  end
+
+  @doc """
+  A byte count rounded to its unit, with the exact count and a copy button in a
+  tooltip. `nil` renders a dash.
+  """
+  attr :id, :string, required: true
+  attr :value, :integer, required: true
+
+  def bytes(%{value: nil} = assigns) do
+    ~H"""
+    {Formatters.format_bytes(nil)}
+    """
+  end
+
+  def bytes(assigns) do
+    ~H"""
+    <.tooltip id={@id} interactive tip_class="font-mono">
+      <span tabindex="0" aria-describedby={"#{@id}-tip"}>{Formatters.format_bytes(@value)}</span>
+      <:content>
+        <div class="flex items-center gap-1">
+          <span id={"#{@id}-exact"}>{Formatters.format_exact_bytes(@value)}</span>
+          <.copy_button
+            id={"#{@id}-copy"}
+            target={"##{@id}-exact"}
+            icon_only
+            label="Copy bytes"
+            size={:sm}
+            class="text-base-content/60 shrink-0 hover:text-primary"
+          />
+        </div>
+      </:content>
+    </.tooltip>
     """
   end
 
@@ -676,7 +710,12 @@ defmodule VoyagerWeb.CoreComponents do
         id={@id}
         name={@name}
         value={Phoenix.HTML.Form.normalize_value(@type, @value)}
-        class={["input input-bordered w-full", @errors != [] && "input-error", @class]}
+        class={[
+          "input input-bordered w-full",
+          @type == "number" && "no-spinner",
+          @errors != [] && "input-error",
+          @class
+        ]}
         {@rest}
       />
       <p :for={error <- @errors} class="font-mono text-error mt-1.5 text-xs">{error}</p>
@@ -738,7 +777,7 @@ defmodule VoyagerWeb.CoreComponents do
         ]}
       >
         <span class="grow text-left">{@label}</span>
-        <span class="font-mono text-base-content/60">{@count}</span>
+        <span class="font-mono text-base-content/60 min-w-4 text-right">{@count}</span>
         <.icon name="icon-chevron-right" class="size-3.5 shrink-0 rotate-90 opacity-60" />
       </div>
 
@@ -746,7 +785,7 @@ defmodule VoyagerWeb.CoreComponents do
         tabindex="0"
         role="group"
         aria-label={@label}
-        class="dropdown-content bg-base-100 rounded-box border-base-300 z-50 mt-1 w-56 border p-2 shadow-lg"
+        class="dropdown-content bg-base-100 rounded-box border-base-300 z-30 mt-1 w-56 border p-2 shadow-lg"
       >
         <label
           :for={{value, label, locked?} <- @options}
@@ -907,9 +946,9 @@ defmodule VoyagerWeb.CoreComponents do
 
   attr :show_when, :string,
     default: nil,
-    values: [nil, "sidebar-compact"],
+    values: [nil, "sidebar-compact", "browser"],
     doc:
-      "when set to sidebar-compact, the tip only opens while the app sidebar is in compact (icon-only) mode"
+      "restricts when the tip opens: sidebar-compact while the app sidebar is in compact (icon-only) mode, browser outside the desktop app"
 
   slot :inner_block, required: true, doc: "the hover/focus target"
   slot :content, required: true, doc: "tooltip content"
@@ -956,7 +995,7 @@ defmodule VoyagerWeb.CoreComponents do
       <div
         id={"#{@id}-tip"}
         role="tooltip"
-        phx-update="ignore"
+        phx-mounted={JS.ignore_attributes(["class", "style"])}
         class={[
           "tooltip-pop bg-base-100 text-base-content rounded-box max-w-xs px-3 py-2",
           "ring-base-content/15 text-xs leading-relaxed shadow-lg ring-1",

@@ -1,8 +1,8 @@
-defmodule Voyager.Services.Erlssh.ConnectionTest do
+defmodule Voyager.Services.SSH.ErlsshTest do
   # async: false because the test points HOME, which :ssh_file reads for known_hosts, at a tmp dir.
   use ExUnit.Case, async: false
 
-  alias Voyager.Services.Erlssh.Connection
+  alias Voyager.Services.SSH.Erlssh
   alias Voyager.Test.SshServer
 
   setup %{tmp_dir: tmp_dir} do
@@ -16,14 +16,14 @@ defmodule Voyager.Services.Erlssh.ConnectionTest do
     %{port: port} = SshServer.start!({127, 0, 0, 1})
 
     assert {:ok, conn} =
-             Connection.connect_ssh(
+             Erlssh.connect(
                "127.0.0.1",
                port,
                SshServer.user(),
                {:password, SshServer.password()}
              )
 
-    :ssh.close(conn)
+    Erlssh.close(conn)
     refute File.exists?(Path.join([tmp_dir, ".ssh", "known_hosts"]))
   end
 end
