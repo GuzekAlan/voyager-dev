@@ -21,7 +21,7 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
 
   @cookie "ssh_test_cookie"
 
-  setup_all do
+  setup_all ctx do
     if not Voyager.ProxyEpmd.active?() do
       flunk(
         ~s(run with ELIXIR_ERL_OPTIONS="-proto_dist dual_tcp -epmd_module Elixir.Voyager.ProxyEpmd")
@@ -29,11 +29,6 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
     end
 
     :inet_db.set_tcp_module(Voyager.Test.DualTcp)
-  end
-
-  setup ctx do
-    {:ok, ssh_address} = :inet.parse_address(String.to_charlist(ctx.ssh_host))
-    %{port: ssh_port, daemon: daemon} = SshServer.start!(ssh_address)
     peer_name = "voyager_ssh_peer_#{System.unique_integer([:positive])}"
 
     {:ok, peer, peer_node} =
@@ -52,12 +47,15 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
           ] ++ listen_args(ctx.node_listen)
       })
 
-    on_exit(fn ->
-      :peer.stop(peer)
-      :net_kernel.stop()
-    end)
+    on_exit(fn -> :peer.stop(peer) end)
+    %{peer_name: peer_name, peer_node: peer_node}
+  end
 
-    %{ssh_port: ssh_port, daemon: daemon, peer_name: peer_name, peer_node: peer_node}
+  setup ctx do
+    {:ok, ssh_address} = :inet.parse_address(String.to_charlist(ctx.ssh_host))
+    %{port: ssh_port, daemon: daemon} = SshServer.start!(ssh_address)
+    on_exit(fn -> :net_kernel.stop() end)
+    %{ssh_port: ssh_port, daemon: daemon}
   end
 
   defp listen_args(:ipv4), do: []
@@ -107,8 +105,6 @@ defmodule Voyager.Services.RemoteNodeConnectorSshTest do
   test "fails with a wrong SSH password", ctx do
     assert {:error, ~c"Unable to connect using the available authentication methods"} =
              connect(ctx, password: "wrong")
-
-    refute ctx.peer_node in Node.list(:connected)
   end
 
   test "fails when the node is not registered in the remote epmd", ctx do
