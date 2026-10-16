@@ -82,9 +82,7 @@ defmodule Voyager.Services.Tracer do
 
   @impl true
   def init(nil),
-    do:
-      {:ok,
-       %{session: nil, agent_args: nil, events: [], dropped_here: 0, stopping: nil, run: nil}}
+    do: {:ok, %{session: nil, agent_args: nil, events: [], run: nil}}
 
   @impl true
   def handle_call(
@@ -144,10 +142,15 @@ defmodule Voyager.Services.Tracer do
             |> Map.put(:origin, session.origin)
         )
 
-        run = %{events: session.events, dropped: session.dropped, at: System.monotonic_time()}
+        run = %{
+          events: session.events,
+          dropped: session.dropped,
+          dropped_here: 0,
+          stopping: nil,
+          at: System.monotonic_time()
+        }
 
-        {:reply, {:ok, session},
-         %{state | session: session, dropped_here: 0, stopping: nil, run: run}}
+        {:reply, {:ok, session}, %{state | session: session, run: run}}
 
       {:ok, {:error, reason}} ->
         start_failed(reason, state)
@@ -160,7 +163,7 @@ defmodule Voyager.Services.Tracer do
   # The session ends on the tracer's done message or its DOWN, never on this reply.
   def handle_call(:stop, _from, %{session: %{status: :running} = session} = state) do
     Agent.call(session.node, :trace_stop, [session.tracer], Agent.default_timeout())
-    {:reply, :ok, %{state | stopping: :stopped}}
+    {:reply, :ok, %{state | run: %{state.run | stopping: :stopped}}}
   end
 
   def handle_call(:stop, _from, state), do: {:reply, :ok, state}
@@ -169,40 +172,41 @@ defmodule Voyager.Services.Tracer do
 
   @impl true
   def handle_cast(:disconnected, %{session: %{status: :running}} = state),
-    do: {:noreply, %{state | stopping: :disconnected}}
+    do: {:noreply, %{state | run: %{state.run | stopping: :disconnected}}}
 
   def handle_cast(:disconnected, state), do: {:noreply, state}
 
   @impl true
   def handle_info(
         {:voyager_trace_events, tracer, events, dropped},
-        %{session: %{tracer: tracer, status: :running} = session} = state
+        %{session: %{tracer: tracer, status: :running} = session, run: run} = state
       ) do
-    if overloaded?() do
-      dropped_here = state.dropped_here + length(events)
-      session = %{session | dropped: state.run.dropped + dropped + dropped_here}
-      {:noreply, %{state | session: session, dropped_here: dropped_here}}
-    else
-      events = Enum.with_index(events, fn event, i -> Map.put(event, :id, session.events + i) end)
+    {events, dropped_here} =
+      if overloaded?(),
+        do: {[], run.dropped_here + length(events)},
+        else: {events, run.dropped_here}
 
-      session = %{
-        session
-        | events: session.events + length(events),
-          dropped: state.run.dropped + dropped + state.dropped_here
-      }
+    events = Enum.with_index(events, fn event, i -> Map.put(event, :id, session.events + i) end)
 
-      broadcast({:trace_events, session, events})
+    session = %{
+      session
+      | events: session.events + length(events),
+        dropped: run.dropped + dropped + dropped_here
+    }
 
-      kept = Enum.take(Enum.reverse(events) ++ state.events, @kept_events)
-      {:noreply, %{state | session: session, events: kept}}
-    end
+    if events != [], do: broadcast({:trace_events, session, events})
+
+    kept = Enum.take(Enum.reverse(events) ++ state.events, @kept_events)
+
+    {:noreply,
+     %{state | session: session, events: kept, run: %{run | dropped_here: dropped_here}}}
   end
 
   def handle_info(
         {:voyager_trace_done, tracer, reason, %{dropped: dropped}},
         %{session: %{tracer: tracer, status: :running}} = state
       ) do
-    {:noreply, finish(state, reason, state.run.dropped + dropped + state.dropped_here)}
+    {:noreply, finish(state, reason, state.run.dropped + dropped + state.run.dropped_here)}
   end
 
   def handle_info(
@@ -218,7 +222,7 @@ defmodule Voyager.Services.Tracer do
     session = %{
       state.session
       | status: :stopped,
-        stop_reason: state.stopping || reason,
+        stop_reason: run.stopping || reason,
         dropped: dropped,
         ended_at: DateTime.utc_now()
     }
@@ -235,7 +239,7 @@ defmodule Voyager.Services.Tracer do
       metadata: %{origin: session.origin, reason: session.stop_reason}
     )
 
-    %{state | session: session, stopping: nil}
+    %{state | session: session}
   end
 
   defp start_failed(reason, state) do

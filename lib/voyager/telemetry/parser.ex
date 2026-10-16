@@ -68,8 +68,6 @@ defmodule Voyager.Telemetry.Parser do
   def parse_measurements([:voyager, :node, :disconnect], _m), do: %{}
   def parse_measurements([:voyager, :mcp, :start], _m), do: %{}
   def parse_measurements([:voyager, :mcp, :stop], _m), do: %{}
-  def parse_measurements([:voyager, :trace, :start], _m), do: %{}
-  def parse_measurements([:voyager, :trace, :start_failed], _m), do: %{}
 
   def parse_measurements([:voyager, :trace, :stop], m) do
     Map.take(m, [:events, :dropped, :duration_ms])

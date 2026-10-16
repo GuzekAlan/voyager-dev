@@ -100,6 +100,17 @@ defmodule Voyager.Services.TracerTest do
     assert length(events) == 500
   end
 
+  test "drops batches while its mailbox is over the limit" do
+    assert {:ok, _session} = configure()
+    assert {:ok, %{tracer: tracer}} = Tracer.start()
+
+    :sys.suspend(Tracer)
+    for _ <- 1..1_005, do: send(Tracer, {:voyager_trace_events, tracer, [%{}], 0})
+    :sys.resume(Tracer)
+
+    assert_receive {:trace_events, %{events: 1_001, dropped: 4}, [%{id: 1_000}]}
+  end
+
   test "returns the agent's refusal on start" do
     assert {:ok, _session} = configure(%{module: "Elixir.Voyager.NoSuchModule"})
     assert {:error, :unknown_function} = Tracer.start()
