@@ -1,4 +1,4 @@
-defmodule VoyagerWeb.ConnectLive.ConnectError do
+defmodule Voyager.NodeSession.ConnectError do
   @moduledoc """
   User-facing messages for `NodeSession` connect failures from either connector.
   """

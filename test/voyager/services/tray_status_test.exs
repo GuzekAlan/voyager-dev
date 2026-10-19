@@ -129,12 +129,36 @@ defmodule Voyager.Services.TrayStatusTest do
            } = receive_status()
   end
 
-  test "has no connection to offer when none can reconnect unattended" do
+  test "offers a connection without a saved cookie and reports it on connect" do
     insert!(%Connection{node_name: "nocookie@host"}, 0)
+    broadcast(NodeSession.topic(), {:node_disconnected, @node, nil})
+    assert %{"last_connection" => %{"node" => "nocookie@host"}} = receive_status()
+
+    send(TrayStatus, "connect")
+    assert %{"connecting" => true} = receive_status()
+    assert %{"connecting" => false, "error" => error} = receive_status()
+    assert is_binary(error)
+  end
+
+  test "reports an SSH profile without a saved password on connect" do
+    insert!(
+      %SshConnection{
+        ssh_user: "deploy",
+        ssh_host: "gw",
+        node_name: "nopassword@host",
+        cookie: "secret",
+        auth_method: :password
+      },
+      0
+    )
 
     broadcast(NodeSession.topic(), {:node_disconnected, @node, nil})
+    assert %{"last_connection" => %{"node" => "nopassword@host"}} = receive_status()
 
-    assert %{"last_connection" => nil} = receive_status()
+    send(TrayStatus, "connect")
+    assert %{"connecting" => true} = receive_status()
+    assert %{"connecting" => false, "error" => error} = receive_status()
+    assert is_binary(error)
   end
 
   defp insert!(connection, hours_ago) do

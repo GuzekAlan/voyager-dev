@@ -6,10 +6,10 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
 
   alias Voyager.Actions.SshConnections, as: SshConnectionActions
   alias Voyager.NodeSession
+  alias Voyager.NodeSession.ConnectError
   alias Voyager.NodeSession.Connectors.Ssh, as: SshConnector
   alias Voyager.Queries.SshConnections, as: SshConnectionQueries
   alias VoyagerWeb.ConnectComponents
-  alias VoyagerWeb.ConnectLive.ConnectError
   alias VoyagerWeb.ConnectLive.KeyAuth
   alias VoyagerWeb.ConnectLive.RecentConnections
   alias VoyagerWeb.ConnectLive.SecretVisibility

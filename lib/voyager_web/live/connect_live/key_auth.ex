@@ -5,9 +5,9 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
   import Phoenix.LiveView, only: [attach_hook: 4]
 
   alias Phoenix.LiveView.Socket
+  alias Voyager.NodeSession.ConnectError
   alias Voyager.Schemas.SshConnection
   alias Voyager.Services.SSH.KeyFile
-  alias VoyagerWeb.ConnectLive.ConnectError
   alias VoyagerWeb.FormSchemas.SshConnectionParams
 
   @spec init(Socket.t()) :: Socket.t()
