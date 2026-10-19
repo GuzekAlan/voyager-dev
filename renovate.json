@@ -1,0 +1,21 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "enabledManagers": ["asdf"],
+  "schedule": ["before 7am on monday"],
+  "commitMessagePrefix": "Chore:",
+  "packageRules": [
+    {
+      "matchDepNames": ["erlang", "elixir"],
+      "groupName": "Elixir and OTP"
+    },
+    {
+      "matchDepNames": ["elixir"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(-otp-(?<compatibility>\\d+))?$"
+    },
+    {
+      "matchDepNames": ["erlang"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    }
+  ]
+}
