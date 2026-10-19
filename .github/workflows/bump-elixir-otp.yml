@@ -13,7 +13,9 @@ permissions:
 jobs:
   bump:
     name: Bump Elixir and OTP
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: chore/bump-elixir-otp
@@ -28,26 +30,4 @@ jobs:
       - name: Open PR and run CI
         env:
           TITLE: "Chore: Bump Elixir to ${{ steps.versions.outputs.elixir }} and OTP to ${{ steps.versions.outputs.otp }}"
-        run: |
-          if git diff --quiet; then
-            echo "Already up to date"
-            exit 0
-          fi
-          if git fetch -q origin "$BRANCH" && git diff --quiet FETCH_HEAD -- .tool-versions; then
-            echo "$BRANCH already has these versions"
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$BRANCH"
-          git commit -am "$TITLE"
-          git push --force origin "$BRANCH"
-
-          gh pr create --base main --head "$BRANCH" --title "$TITLE" \
-            --body "Automated bump by the Bump Elixir and OTP workflow." ||
-            gh pr edit "$BRANCH" --title "$TITLE"
-
-          # PRs opened with GITHUB_TOKEN do not trigger pull_request workflows.
-          gh workflow run ci-check.yaml --ref "$BRANCH"
-          gh workflow run playwright.yml --ref "$BRANCH"
+        run: bash .github/scripts/open_bump_pr.sh
