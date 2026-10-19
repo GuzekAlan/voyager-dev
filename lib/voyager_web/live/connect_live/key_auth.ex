@@ -37,24 +37,23 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
 
   @spec restore(Socket.t(), SshConnection.t()) :: Socket.t()
   def restore(socket, %SshConnection{} = conn),
-    do: assign(socket, :key_passphrase, conn.passphrase && {conn.key_path, conn.passphrase})
+    do: assign(socket, :key_passphrase, conn.passphrase && {conn.key_path, conn.passphrase, true})
 
   @spec connect(Socket.t(), SshConnectionParams.t(), (Socket.t(), SshConnectionParams.t() ->
                                                         Socket.t())) :: Socket.t()
   def connect(socket, %SshConnectionParams{auth_method: :key} = p, start) do
-    p = %{
-      p
-      | passphrase: p.passphrase || saved_passphrase(socket.assigns.key_passphrase, p.key_path)
-    }
+    p = with_saved_passphrase(p, socket.assigns.key_passphrase)
 
     case KeyFile.check(p.key_path, p.passphrase) do
       {:error, reason} when reason in [:key_passphrase_required, :key_bad_passphrase] ->
         assign(socket, :passphrase_form, passphrase_form(reason, p.remember_passphrase))
 
       _ ->
+        saved = p.passphrase && {p.key_path, p.passphrase, p.remember_passphrase}
+
         socket
         |> assign(:passphrase_form, nil)
-        |> assign(:key_passphrase, p.passphrase && {p.key_path, p.passphrase})
+        |> assign(:key_passphrase, saved)
         |> start.(p)
     end
   end
@@ -85,6 +84,8 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
     to_form(%{"remember" => to_string(remember)}, as: :passphrase, errors: errors)
   end
 
-  defp saved_passphrase({path, passphrase}, path), do: passphrase
-  defp saved_passphrase(_saved, _path), do: nil
+  defp with_saved_passphrase(%{passphrase: nil, key_path: path} = p, {path, pass, remember}),
+    do: %{p | passphrase: pass, remember_passphrase: remember}
+
+  defp with_saved_passphrase(p, _saved), do: p
 end
