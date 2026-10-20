@@ -151,6 +151,21 @@ defmodule VoyagerWeb.ConnectLiveSshKeyTest do
     refute has_element?(view, "#ssh-passphrase-modal")
   end
 
+  test "marks the identity file when the key disappears behind the modal", %{
+    conn: conn,
+    tmp_dir: dir
+  } do
+    path = encrypted_pem!(dir)
+    {:ok, view, _html} = live(conn, ~p"/?mode=ssh")
+    submit_connect(view, path)
+    File.rm!(path)
+
+    submit_passphrase(view, @passphrase)
+
+    refute has_element?(view, "#ssh-passphrase-modal")
+    assert has_element?(view, "#ssh_key_path.input-error")
+  end
+
   test "uses the passphrase saved with a recent connection", %{conn: conn, tmp_dir: dir} do
     path = encrypted_pem!(dir)
     save_key_profile!(path, @passphrase)

@@ -48,7 +48,12 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
       {:error, reason} when reason in [:key_passphrase_required, :key_bad_passphrase] ->
         assign(socket, :passphrase_form, passphrase_form(reason, p.remember_passphrase))
 
-      _ ->
+      {:error, reason} ->
+        socket
+        |> assign(:passphrase_form, nil)
+        |> update(:ssh_form, &%{&1 | errors: [key_path: {ConnectError.message(reason), []}]})
+
+      :ok ->
         saved = p.passphrase && {p.key_path, p.passphrase, p.remember_passphrase}
 
         socket
