@@ -320,7 +320,11 @@ defmodule VoyagerWeb.ConnectComponents do
       aria-labelledby={"#{@id}-title"}
       class="modal modal-open"
     >
-      <div class="modal-box border-base-300 max-w-md border shadow-2xl">
+      <.focus_wrap
+        id={"#{@id}-box"}
+        phx-mounted={JS.focus_first()}
+        class="modal-box border-base-300 max-w-md border shadow-2xl"
+      >
         <h2 id={"#{@id}-title"} class="text-base-content text-lg font-semibold tracking-tight">
           Key passphrase
         </h2>
@@ -359,7 +363,7 @@ defmodule VoyagerWeb.ConnectComponents do
             </button>
           </div>
         </.form>
-      </div>
+      </.focus_wrap>
     </div>
     """
   end
