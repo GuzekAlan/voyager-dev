@@ -142,26 +142,28 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
           />
         </div>
 
-        <ConnectComponents.secret_field
-          :if={@current_auth_method == "password"}
-          field={@ssh_form[:password]}
-          label="SSH Password"
-          secret_key="password"
-          shown={SecretVisibility.shown?(@secret_visibility, "password")}
-          target={@myself}
-          remember_name="ssh[remember_password]"
-          remember_checked={to_string(@ssh_form[:remember_password].value) == "true"}
-          remember_label="Remember password"
-          disabled={@disabled?}
-        />
+        <div class={[@current_auth_method != "password" && "hidden"]}>
+          <ConnectComponents.secret_field
+            field={@ssh_form[:password]}
+            label="SSH Password"
+            secret_key="password"
+            shown={SecretVisibility.shown?(@secret_visibility, "password")}
+            target={@myself}
+            remember_name="ssh[remember_password]"
+            remember_checked={to_string(@ssh_form[:remember_password].value) == "true"}
+            remember_label="Remember password"
+            disabled={@disabled?}
+          />
+        </div>
 
-        <ConnectComponents.path_field
-          :if={@current_auth_method == "key"}
-          field={@ssh_form[:key_path]}
-          label="Identity file"
-          placeholder="~/.ssh/id_ed25519"
-          disabled={@disabled?}
-        />
+        <div class={[@current_auth_method != "key" && "hidden"]}>
+          <ConnectComponents.path_field
+            field={@ssh_form[:key_path]}
+            label="Identity file"
+            placeholder="~/.ssh/id_ed25519"
+            disabled={@disabled?}
+          />
+        </div>
 
         <div>
           <button
@@ -235,7 +237,6 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
         id={"#{@id_prefix}passphrase-modal"}
         form={@passphrase_form}
         key_path={@ssh_form[:key_path].value}
-        shown={SecretVisibility.shown?(@secret_visibility, "passphrase")}
         target={@myself}
         on_change="change_passphrase"
         on_submit="submit_passphrase"
@@ -272,9 +273,9 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
             <ConnectComponents.saved_badge :if={@conn.cookie} label="cookie" title="Cookie saved" />
             <ConnectComponents.saved_badge :if={@conn.password} label="pass" title="Password saved" />
             <ConnectComponents.saved_badge
-              :if={@conn.passphrase}
-              label="key"
-              title="Key passphrase saved"
+              :if={@conn.key_path}
+              label="key path"
+              title="Key path saved"
             />
           </div>
         </div>
@@ -320,21 +321,11 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     end
   end
 
-  def handle_event(
-        "submit_passphrase",
-        %{"passphrase" => %{"passphrase" => passphrase, "remember" => remember}},
-        socket
-      ) do
-    p =
-      socket.assigns.ssh_form.params
-      |> SshConnectionParams.changeset()
-      |> Ecto.Changeset.apply_changes()
+  def handle_event("submit_passphrase", %{"passphrase" => %{"passphrase" => passphrase}}, socket) do
+    p = Ecto.Changeset.apply_changes(socket.assigns.ssh_form.source)
 
     socket
-    |> KeyAuth.connect(
-      %{p | passphrase: passphrase, remember_passphrase: remember == "true"},
-      &start_connect/2
-    )
+    |> KeyAuth.connect(%{p | passphrase: passphrase}, &start_connect/2)
     |> noreply()
   end
 
@@ -359,7 +350,6 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
 
       socket
       |> assign(:ssh_form, KeyAuth.checked_form(SshConnectionParams.changeset(params)))
-      |> KeyAuth.restore(conn)
       |> SecretVisibility.reset()
     end)
   end
@@ -407,7 +397,6 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
       auth_method: p.auth_method,
       password: if(p.remember_password and p.auth_method == :password, do: p.password),
       key_path: if(p.auth_method == :key, do: p.key_path),
-      passphrase: if(p.remember_passphrase, do: p.passphrase),
       epmd_port: p.epmd_port
     )
   end

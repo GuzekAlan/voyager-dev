@@ -3,7 +3,6 @@ defmodule VoyagerWeb.ConnectLiveSshKeyTest do
 
   import Phoenix.LiveViewTest
 
-  alias Voyager.Actions.SshConnections, as: SshConnectionActions
   alias Voyager.Fakes
   alias Voyager.NodeSession
   alias Voyager.Test.SshKeys
@@ -41,7 +40,7 @@ defmodule VoyagerWeb.ConnectLiveSshKeyTest do
   defp submit_passphrase(view, passphrase) do
     view
     |> element("#ssh-passphrase-modal-form")
-    |> render_submit(%{"passphrase" => %{"passphrase" => passphrase, "remember" => "false"}})
+    |> render_submit(%{"passphrase" => %{"passphrase" => passphrase}})
   end
 
   defp encrypted_pem!(dir) do
@@ -50,23 +49,18 @@ defmodule VoyagerWeb.ConnectLiveSshKeyTest do
     path
   end
 
-  defp save_key_profile!(key_path, passphrase) do
-    {:ok, _profile} =
-      SshConnectionActions.upsert_connected("deploy", "gw", 22, "demo@localhost",
-        cookie: "secret",
-        auth_method: :key,
-        key_path: key_path,
-        passphrase: passphrase
-      )
-  end
-
-  test "shows the identity file field for key auth", %{conn: conn} do
+  test "keeps the identity file when switching auth method", %{conn: conn, tmp_dir: dir} do
+    path = encrypted_pem!(dir)
     {:ok, view, _html} = live(conn, ~p"/?mode=ssh")
-    refute has_element?(view, "#ssh_key_path")
+    pick_key(view, path)
 
-    pick_key(view, "")
+    for auth_method <- ["agent", "key"] do
+      view
+      |> element("#ssh-connect-form")
+      |> render_change(%{"ssh" => %{"auth_method" => auth_method}})
+    end
 
-    assert has_element?(view, "#ssh_key_path")
+    assert has_element?(view, ~s|#ssh_key_path[value="#{path}"]|)
   end
 
   test "marks only the identity file for a passphrase-protected OpenSSH key", %{
@@ -164,29 +158,5 @@ defmodule VoyagerWeb.ConnectLiveSshKeyTest do
 
     refute has_element?(view, "#ssh-passphrase-modal")
     assert has_element?(view, "#ssh_key_path.input-error")
-  end
-
-  test "uses the passphrase saved with a recent connection", %{conn: conn, tmp_dir: dir} do
-    path = encrypted_pem!(dir)
-    save_key_profile!(path, @passphrase)
-    {:ok, view, _html} = live(conn, ~p"/?mode=ssh")
-
-    view |> element(~s|[data-testid="fill-ssh-recent-btn"]|) |> render_click()
-    submit_connect(view, path)
-
-    refute has_element?(view, "#ssh-passphrase-modal")
-    render_async(view)
-  end
-
-  test "asks again when the saved passphrase no longer fits", %{conn: conn, tmp_dir: dir} do
-    path = encrypted_pem!(dir)
-    save_key_profile!(path, "stale-passphrase")
-    {:ok, view, _html} = live(conn, ~p"/?mode=ssh")
-
-    view |> element(~s|[data-testid="fill-ssh-recent-btn"]|) |> render_click()
-    submit_connect(view, path)
-
-    assert has_element?(view, "#ssh-passphrase-modal")
-    assert has_element?(view, "#passphrase_passphrase.input-error")
   end
 end

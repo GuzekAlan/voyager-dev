@@ -19,7 +19,6 @@ defmodule VoyagerWeb.FormSchemas.SshConnectionParams do
     field :epmd_port, :integer, default: 4369
     field :remember_cookie, :boolean, default: false
     field :remember_password, :boolean, default: false
-    field :remember_passphrase, :boolean, default: false
   end
 
   @type t :: %__MODULE__{
@@ -35,8 +34,7 @@ defmodule VoyagerWeb.FormSchemas.SshConnectionParams do
           passphrase: String.t() | nil,
           epmd_port: integer(),
           remember_cookie: boolean(),
-          remember_password: boolean(),
-          remember_passphrase: boolean()
+          remember_password: boolean()
         }
 
   @spec changeset(map()) :: Ecto.Changeset.t()

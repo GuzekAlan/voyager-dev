@@ -305,7 +305,6 @@ defmodule VoyagerWeb.ConnectComponents do
   attr :id, :string, required: true
   attr :form, Phoenix.HTML.Form, required: true
   attr :key_path, :string, required: true
-  attr :shown, :boolean, default: false
   attr :target, :any, default: nil
   attr :on_change, :string, required: true
   attr :on_submit, :string, required: true
@@ -337,16 +336,7 @@ defmodule VoyagerWeb.ConnectComponents do
           phx-change={@on_change}
           phx-submit={@on_submit}
         >
-          <.secret_field
-            field={@form[:passphrase]}
-            label="Passphrase"
-            secret_key="passphrase"
-            shown={@shown}
-            target={@target}
-            remember_name={@form[:remember].name}
-            remember_checked={to_string(@form[:remember].value) == "true"}
-            remember_label="Remember passphrase"
-          />
+          <.form_field field={@form[:passphrase]} label="Passphrase" type="password" />
 
           <div class="modal-action">
             <button

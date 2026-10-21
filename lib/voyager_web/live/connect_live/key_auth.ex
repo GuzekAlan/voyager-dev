@@ -6,7 +6,6 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
 
   alias Phoenix.LiveView.Socket
   alias Voyager.NodeSession.ConnectError
-  alias Voyager.Schemas.SshConnection
   alias Voyager.Services.SSH.KeyFile
   alias VoyagerWeb.FormSchemas.SshConnectionParams
 
@@ -14,7 +13,6 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
   def init(socket) do
     socket
     |> assign(:passphrase_form, nil)
-    |> assign(:key_passphrase, nil)
     |> attach_hook(:key_auth, :handle_event, &handle_event/3)
   end
 
@@ -35,18 +33,12 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
     end
   end
 
-  @spec restore(Socket.t(), SshConnection.t()) :: Socket.t()
-  def restore(socket, %SshConnection{} = conn),
-    do: assign(socket, :key_passphrase, conn.passphrase && {conn.key_path, conn.passphrase, true})
-
   @spec connect(Socket.t(), SshConnectionParams.t(), (Socket.t(), SshConnectionParams.t() ->
                                                         Socket.t())) :: Socket.t()
   def connect(socket, %SshConnectionParams{auth_method: :key} = p, start) do
-    p = with_saved_passphrase(p, socket.assigns.key_passphrase)
-
     case KeyFile.check(p.key_path, p.passphrase) do
       {:error, reason} when reason in [:key_passphrase_required, :key_bad_passphrase] ->
-        assign(socket, :passphrase_form, passphrase_form(reason, p.remember_passphrase))
+        assign(socket, :passphrase_form, passphrase_form(reason))
 
       {:error, reason} ->
         socket
@@ -54,11 +46,8 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
         |> update(:ssh_form, &%{&1 | errors: [key_path: {ConnectError.message(reason), []}]})
 
       :ok ->
-        saved = p.passphrase && {p.key_path, p.passphrase, p.remember_passphrase}
-
         socket
         |> assign(:passphrase_form, nil)
-        |> assign(:key_passphrase, saved)
         |> start.(p)
     end
   end
@@ -82,15 +71,10 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
 
   defp check(%SshConnectionParams{}), do: :ok
 
-  defp passphrase_form(reason, remember) do
+  defp passphrase_form(reason) do
     errors =
       if reason == :key_bad_passphrase, do: [passphrase: {"Wrong passphrase", []}], else: []
 
-    to_form(%{"remember" => to_string(remember)}, as: :passphrase, errors: errors)
+    to_form(%{}, as: :passphrase, errors: errors)
   end
-
-  defp with_saved_passphrase(%{passphrase: nil, key_path: path} = p, {path, pass, remember}),
-    do: %{p | passphrase: pass, remember_passphrase: remember}
-
-  defp with_saved_passphrase(p, _saved), do: p
 end

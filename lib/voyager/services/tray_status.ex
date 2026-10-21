@@ -173,7 +173,7 @@ defmodule Voyager.Services.TrayStatus do
   defp ssh_auth(%{auth_method: :password, password: nil}), do: {:error, :missing_password}
   defp ssh_auth(%{auth_method: :password, password: password}), do: {:ok, {:password, password}}
 
-  defp ssh_auth(%{auth_method: :key} = c), do: {:ok, {:key, c.key_path, c.passphrase}}
+  defp ssh_auth(%{auth_method: :key, key_path: path}), do: {:ok, {:key, path, nil}}
 
   defp connect_ssh(c, auth) do
     opts = [

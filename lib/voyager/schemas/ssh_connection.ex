@@ -18,7 +18,6 @@ defmodule Voyager.Schemas.SshConnection do
           auth_method: :agent | :password | :key,
           password: String.t() | nil,
           key_path: String.t() | nil,
-          passphrase: String.t() | nil,
           epmd_port: integer(),
           pinned: boolean(),
           last_connected_at: DateTime.t() | nil,
@@ -36,7 +35,6 @@ defmodule Voyager.Schemas.SshConnection do
     field :auth_method, Ecto.Enum, values: [:agent, :password, :key], default: :agent
     field :password, Voyager.Encrypted.Binary
     field :key_path, :string
-    field :passphrase, Voyager.Encrypted.Binary
     field :epmd_port, :integer, default: 4369
     field :pinned, :boolean, default: false
     field :last_connected_at, :utc_datetime
@@ -57,7 +55,6 @@ defmodule Voyager.Schemas.SshConnection do
       :auth_method,
       :password,
       :key_path,
-      :passphrase,
       :epmd_port,
       :pinned,
       :last_connected_at

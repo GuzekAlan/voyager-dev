@@ -134,28 +134,31 @@ defmodule Voyager.SshConnectionsTest do
       assert SshConnectionQueries.get_by_profile(user, host, port, node).password == "keep-pass"
     end
 
-    test "stores key_path and passphrase for key auth" do
+    test "stores key_path for key auth" do
       {user, host, port, node} = @base_profile
 
       SshConnectionActions.upsert_connected(user, host, port, node,
         auth_method: :key,
-        key_path: "~/.ssh/id_rsa",
-        passphrase: "key-pass"
+        key_path: "~/.ssh/id_rsa"
       )
 
       conn = SshConnectionQueries.get_by_profile(user, host, port, node)
 
-      assert {conn.auth_method, conn.key_path, conn.passphrase} ==
-               {:key, "~/.ssh/id_rsa", "key-pass"}
+      assert {conn.auth_method, conn.key_path} == {:key, "~/.ssh/id_rsa"}
     end
 
-    test "preserves existing passphrase when no passphrase is supplied" do
+    test "preserves existing key_path when connecting with another auth method" do
       {user, host, port, node} = @base_profile
-      SshConnectionActions.upsert_connected(user, host, port, node, passphrase: "keep-key-pass")
-      SshConnectionActions.upsert_connected(user, host, port, node, key_path: "~/.ssh/id_rsa")
 
-      assert SshConnectionQueries.get_by_profile(user, host, port, node).passphrase ==
-               "keep-key-pass"
+      SshConnectionActions.upsert_connected(user, host, port, node,
+        auth_method: :key,
+        key_path: "~/.ssh/id_rsa"
+      )
+
+      SshConnectionActions.upsert_connected(user, host, port, node, auth_method: :agent)
+
+      assert SshConnectionQueries.get_by_profile(user, host, port, node).key_path ==
+               "~/.ssh/id_rsa"
     end
 
     test "updates name_type on conflict" do
@@ -204,19 +207,6 @@ defmodule Voyager.SshConnectionsTest do
 
       assert SshConnectionQueries.get_by_profile(user, host, port, node).password ==
                "plaintext-pass"
-    end
-
-    test "passphrase is encrypted at rest" do
-      {user, host, port, node} = @base_profile
-      SshConnectionActions.upsert_connected(user, host, port, node, passphrase: "plaintext-key")
-
-      [raw] = Repo.all(from c in "ssh_connections", select: c.passphrase)
-
-      refute raw == "plaintext-key"
-      assert is_binary(raw)
-
-      assert SshConnectionQueries.get_by_profile(user, host, port, node).passphrase ==
-               "plaintext-key"
     end
 
     test "different node_names on same host create separate records" do
