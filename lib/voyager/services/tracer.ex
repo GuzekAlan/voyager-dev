@@ -194,7 +194,7 @@ defmodule Voyager.Services.Tracer do
         dropped: run.dropped + dropped + dropped_here
     }
 
-    if events != [], do: broadcast({:trace_events, session, events})
+    broadcast({:trace_events, session, events})
 
     kept = Enum.take(Enum.reverse(events) ++ state.events, @kept_events)
 
