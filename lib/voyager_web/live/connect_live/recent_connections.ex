@@ -55,7 +55,7 @@ defmodule VoyagerWeb.ConnectLive.RecentConnections do
       :if={@pinned_connections != []}
       class={["border-base-300 mt-7 border-t pt-5", @disabled && "pointer-events-none opacity-40"]}
     >
-      <p class="font-mono tracking-label text-base-content/50 mb-2.5 text-xs uppercase">
+      <p class="font-mono tracking-label text-base-content/70 mb-2.5 text-xs uppercase">
         Favourites
       </p>
       <ul id={"#{@id_prefix}pinned-connections"} class="-mx-2 flex flex-col gap-0.5">
@@ -73,7 +73,7 @@ defmodule VoyagerWeb.ConnectLive.RecentConnections do
         @disabled && "pointer-events-none opacity-40"
       ]}
     >
-      <p class="font-mono tracking-label text-base-content/50 mb-2.5 text-xs uppercase">
+      <p class="font-mono tracking-label text-base-content/70 mb-2.5 text-xs uppercase">
         Recent connections
       </p>
       <ul id={"#{@id_prefix}recent-connections"} class="-mx-2 flex flex-col gap-0.5">

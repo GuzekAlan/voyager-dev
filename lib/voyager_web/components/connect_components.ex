@@ -75,10 +75,10 @@ defmodule VoyagerWeb.ConnectComponents do
       <div class="bg-success-bg border-success flex items-center justify-between rounded-lg border px-3.5 py-2.5">
         <div class="flex min-w-0 items-center gap-1.5">
           <span class="size-2 relative flex shrink-0">
-            <span class="bg-success size-full absolute inline-flex animate-ping rounded-full opacity-60"></span>
+            <span class="bg-success size-full absolute inline-flex animate-ping rounded-full opacity-75"></span>
             <span class="bg-success size-2 relative inline-flex rounded-full"></span>
           </span>
-          <span class="font-mono text-base-content/75 min-w-0 truncate text-xs">
+          <span class="font-mono text-base-content/70 min-w-0 truncate text-xs">
             {@session.node_name}
           </span>
           <.tooltip id="disconnect-from-connect-tip" position="bottom">

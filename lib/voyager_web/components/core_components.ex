@@ -103,7 +103,7 @@ defmodule VoyagerWeb.CoreComponents do
                   id="node-header-name-copy"
                   target="#node-header-name"
                   icon_only
-                  class="btn-xs text-base-content/50 shrink-0 hover:text-base-content"
+                  class="btn-xs text-base-content/60 shrink-0 hover:text-base-content"
                 />
               </div>
             </:content>

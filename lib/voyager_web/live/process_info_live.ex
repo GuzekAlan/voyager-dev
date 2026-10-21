@@ -82,7 +82,7 @@ defmodule VoyagerWeb.ProcessInfoLive do
                     target="#process-info-pid-text"
                     icon_only
                     label="Copy PID"
-                    class="btn-xs text-base-content/50 shrink-0 hover:text-base-content"
+                    class="btn-xs text-base-content/60 shrink-0 hover:text-base-content"
                   />
                 </div>
               </:content>
@@ -105,7 +105,7 @@ defmodule VoyagerWeb.ProcessInfoLive do
                     target="#process-info-name-text"
                     icon_only
                     label="Copy registered name"
-                    class="btn-xs text-base-content/50 shrink-0 hover:text-base-content"
+                    class="btn-xs text-base-content/60 shrink-0 hover:text-base-content"
                   />
                 </div>
               </:content>

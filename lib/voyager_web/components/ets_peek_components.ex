@@ -65,7 +65,7 @@ defmodule VoyagerWeb.Components.EtsPeekComponents do
                 target="#ets-table-name-text"
                 icon_only
                 label="Copy table name"
-                class="btn-xs text-base-content/50 shrink-0 hover:text-base-content"
+                class="btn-xs text-base-content/60 shrink-0 hover:text-base-content"
               />
             </div>
           </:content>
@@ -235,16 +235,16 @@ defmodule VoyagerWeb.Components.EtsPeekComponents do
             phx-click="toggle_row"
             phx-value-index={index}
             aria-expanded={to_string(row_open?(@open_rows, index))}
-            class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded text-left opacity-80"
+            class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded text-left"
           >
             <.icon
               name="icon-chevron-right"
               class={[
-                "text-base-content/50 size-3.5 shrink-0 transition-transform",
+                "text-base-content/60 size-3.5 shrink-0 transition-transform",
                 row_open?(@open_rows, index) && "rotate-90"
               ]}
             />
-            <span class="text-base-content/50 font-mono shrink-0 text-xs tabular-nums">
+            <span class="text-base-content/70 font-mono shrink-0 text-xs tabular-nums">
               {@offset + index + 1}
             </span>
             <span class="font-mono text-base-content min-w-0 flex-1 truncate text-xs">
@@ -428,7 +428,7 @@ defmodule VoyagerWeb.Components.EtsPeekComponents do
             </div>
           </div>
 
-          <p :if={chunk.truncated?} id="ets-lookup-truncated" class="text-base-content/50 text-xs">
+          <p :if={chunk.truncated?} id="ets-lookup-truncated" class="text-base-content/70 text-xs">
             Shortened to fit the term budget — raise it and refetch to see more.
           </p>
 
