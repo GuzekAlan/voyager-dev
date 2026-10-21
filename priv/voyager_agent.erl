@@ -997,7 +997,7 @@ trace_processes(Session, ProcessSet, Flags) ->
 tracer_loop(T) ->
     case erlang:process_info(self(), message_queue_len) of
         {message_queue_len, Len} when Len > ?TRACE_MAX_MAILBOX ->
-            tracer_stop(T, mailbox_limit);
+            tracer_stop(T#tracer{dropped = T#tracer.dropped + Len}, mailbox_limit);
         _ ->
             tracer_receive(T)
     end.

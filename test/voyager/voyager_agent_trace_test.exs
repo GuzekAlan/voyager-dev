@@ -364,7 +364,8 @@ defmodule VoyagerAgentTraceTest do
     for _ <- 1..5_100, do: String.jaro_distance("a", "b")
     :erlang.resume_process(tracer)
 
-    assert {_events, :mailbox_limit, _stats} = collect(tracer)
+    assert {_events, :mailbox_limit, %{dropped: dropped}} = collect(tracer)
+    assert dropped > 5_000
   end
 
   test "survives a full-budget flood of large arguments" do
