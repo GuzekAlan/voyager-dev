@@ -241,7 +241,7 @@ defmodule Voyager.Services.Tracer do
       metadata: %{origin: session.origin, reason: session.stop_reason}
     )
 
-    %{state | session: session}
+    %{state | session: session, run: nil}
   end
 
   defp start_failed(reason, state) do
