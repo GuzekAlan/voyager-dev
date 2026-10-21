@@ -21,6 +21,7 @@ defmodule Voyager.Services.TrayStatus do
   alias Voyager.Queries.SshConnections, as: SshConnectionQueries
   alias Voyager.Schemas.Connection
   alias Voyager.Schemas.SshConnection
+  alias Voyager.Services.SSH.KeyFile
 
   @native_topic "tray"
   @connect_error "Could not connect"
@@ -173,7 +174,9 @@ defmodule Voyager.Services.TrayStatus do
   defp ssh_auth(%{auth_method: :password, password: nil}), do: {:error, :missing_password}
   defp ssh_auth(%{auth_method: :password, password: password}), do: {:ok, {:password, password}}
 
-  defp ssh_auth(%{auth_method: :key, key_path: path}), do: {:ok, {:key, path, nil}}
+  defp ssh_auth(%{auth_method: :key, key_path: path}) do
+    with :ok <- KeyFile.check(path, nil), do: {:ok, {:key, path, nil}}
+  end
 
   defp connect_ssh(c, auth) do
     opts = [
@@ -200,6 +203,7 @@ defmodule Voyager.Services.TrayStatus do
 
   defp reconnect_message(:missing_cookie), do: "No saved cookie"
   defp reconnect_message(:missing_password), do: "No saved SSH password"
+  defp reconnect_message(:key_passphrase_required), do: "Key needs a passphrase"
   defp reconnect_message(reason), do: ConnectError.message(reason)
 
   defp mcp_error(:port_in_use), do: "MCP port is already in use"
