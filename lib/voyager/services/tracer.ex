@@ -178,7 +178,7 @@ defmodule Voyager.Services.Tracer do
 
   @impl true
   def handle_info(
-        {:voyager_trace_events, tracer, events, dropped},
+        {:voyager_trace_events, tracer, events, agent_dropped},
         %{session: %{tracer: tracer, status: :running} = session, run: run} = state
       ) do
     {events, dropped_here} =
@@ -186,12 +186,14 @@ defmodule Voyager.Services.Tracer do
         do: {[], run.dropped_here + length(events)},
         else: {events, run.dropped_here}
 
-    events = Enum.with_index(events, fn event, i -> Map.put(event, :id, session.events + i) end)
+    dropped = run.dropped + agent_dropped + dropped_here
+    # Ids count dropped events too, so a gap marks where they were lost.
+    events = Enum.with_index(events, &Map.put(&1, :id, session.events + dropped + &2))
 
     session = %{
       session
       | events: session.events + length(events),
-        dropped: run.dropped + dropped + dropped_here
+        dropped: dropped
     }
 
     broadcast({:trace_events, session, events})

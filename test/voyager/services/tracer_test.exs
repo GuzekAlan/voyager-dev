@@ -109,7 +109,7 @@ defmodule Voyager.Services.TracerTest do
     :sys.resume(Tracer)
 
     assert_receive {:trace_events, %{events: 0, dropped: 4}, []}
-    assert_receive {:trace_events, %{events: 1_001, dropped: 4}, [%{id: 1_000}]}
+    assert_receive {:trace_events, %{events: 1_001, dropped: 4}, [%{id: 1_004}]}
   end
 
   test "returns the agent's refusal on start" do
