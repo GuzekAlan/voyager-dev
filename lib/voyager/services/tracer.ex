@@ -7,8 +7,9 @@ defmodule Voyager.Services.Tracer do
   pushes event batches straight to this process.
 
   A session is a log of entries numbered by `seq`: `:configured`, `:started`,
-  `:stopped` and `:trace` (a trace event). The control entries and the newest
-  trace events are kept in memory. Broadcasts on `topic/0` are
+  `:stopped`, `:trace` (a trace event) and `:dropped` (how many events were lost
+  since the previous entry). The configured, started and stopped entries and the
+  newest trace and dropped entries are kept in memory. Broadcasts on `topic/0` are
   `{:session_created, session}`, `{:session_closed, id}` and
   `{:session_log, session, entries}` with the entries just appended, oldest first.
   """
@@ -197,17 +198,14 @@ defmodule Voyager.Services.Tracer do
 
     dropped = run.dropped + agent_dropped + dropped_here
 
-    # Seqs count dropped events too, so a gap marks where they were lost.
-    session = %{
-      session
-      | events: session.events + length(events),
-        dropped: dropped,
-        seq: session.seq + dropped - session.dropped
-    }
+    session = %{session | events: session.events + length(events), dropped: dropped}
 
     state =
       %{state | session: session, run: %{run | dropped_here: dropped_here}}
-      |> append(Enum.map(events, &Map.put(&1, :kind, :trace)))
+      |> append(
+        dropped_entry(dropped - state.session.dropped) ++
+          Enum.map(events, &Map.put(&1, :kind, :trace))
+      )
 
     {:noreply, state}
   end
@@ -252,9 +250,11 @@ defmodule Voyager.Services.Tracer do
       metadata: %{origin: run.origin, reason: reason}
     )
 
-    append(%{state | session: session, run: nil}, [
-      control(:stopped, origin, reason: reason, events: run_events, dropped: run_dropped)
-    ])
+    append(
+      %{state | session: session, run: nil},
+      dropped_entry(session.dropped - state.session.dropped) ++
+        [control(:stopped, origin, reason: reason, events: run_events, dropped: run_dropped)]
+    )
   end
 
   defp start_failed(reason, origin, state) do
@@ -269,11 +269,14 @@ defmodule Voyager.Services.Tracer do
     do:
       Map.merge(%{kind: kind, origin: origin, at: System.os_time(:microsecond)}, Map.new(fields))
 
-  # Control entries are all kept; trace events only up to @kept_events.
+  defp dropped_entry(0), do: []
+  defp dropped_entry(count), do: [control(:dropped, nil, count: count)]
+
+  # Dropped entries come with every shed batch, so they are capped with the trace events.
   defp append(%{session: session} = state, entries) do
     entries = Enum.with_index(entries, &Map.put(&1, :seq, session.seq + &2))
     session = %{session | seq: session.seq + length(entries)}
-    {traces, controls} = Enum.split_with(entries, &(&1.kind == :trace))
+    {traces, controls} = Enum.split_with(entries, &(&1.kind in [:trace, :dropped]))
 
     broadcast({:session_log, session, entries})
 

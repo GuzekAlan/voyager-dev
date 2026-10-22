@@ -149,7 +149,7 @@ defmodule Voyager.Services.TracerTest do
     assert length(entries) == 502
   end
 
-  test "drops batches while its mailbox is over the limit" do
+  test "logs batches dropped here and by the agent" do
     assert {:ok, _session} = configure()
     assert {:ok, %{tracer: tracer}} = Tracer.start(:ui)
 
@@ -157,8 +157,14 @@ defmodule Voyager.Services.TracerTest do
     for _ <- 1..1_005, do: send(Tracer, {:voyager_trace_events, tracer, [%{}], 0})
     :sys.resume(Tracer)
 
-    assert_receive {:session_log, %{events: 0, dropped: 4}, []}
-    assert_receive {:session_log, %{events: 1_001, dropped: 4}, [%{seq: 1_006}]}
+    assert_receive {:session_log, %{events: 0, dropped: 1}, [%{seq: 2, kind: :dropped, count: 1}]}
+    assert_receive {:session_log, %{events: 0, dropped: 4}, [%{seq: 5, kind: :dropped, count: 1}]}
+    assert_receive {:session_log, %{events: 1_001, dropped: 4}, [%{seq: 1_006, kind: :trace}]}
+
+    send(Tracer, {:voyager_trace_events, tracer, [%{}], 2})
+
+    assert_receive {:session_log, %{dropped: 6},
+                    [%{seq: 1_007, kind: :dropped, count: 2}, %{seq: 1_008, kind: :trace}]}
   end
 
   test "returns the agent's refusal on start" do
