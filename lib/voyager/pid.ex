@@ -30,10 +30,10 @@ defmodule Voyager.Pid do
   end
 
   def resolve(node, pid_string) do
-    pid = parse(pid_string)
-    if node(pid) == node, do: {:ok, pid}, else: {:error, :invalid_pid}
-  rescue
-    ArgumentError -> {:error, :invalid_pid}
+    case parse(pid_string) do
+      pid when is_pid(pid) and node(pid) == node -> {:ok, pid}
+      _other -> {:error, :invalid_pid}
+    end
   end
 
   @doc "The `N` of the connected node's `<N.X.Y>` pids, cached by `put_node/1`."

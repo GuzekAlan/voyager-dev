@@ -194,7 +194,7 @@ defmodule Voyager.Services.Tracer do
           dropped_before: session.dropped,
           shed: 0,
           stop_request: nil,
-          started_mono: System.monotonic_time()
+          started_ms: System.monotonic_time(:millisecond)
         }
 
         state = append(%{state | session: session, run: run}, [entry(:started, origin)])
@@ -310,12 +310,7 @@ defmodule Voyager.Services.Tracer do
       measurements: %{
         events: run_traces,
         dropped: run_dropped,
-        duration_ms:
-          System.convert_time_unit(
-            System.monotonic_time() - run.started_mono,
-            :native,
-            :millisecond
-          )
+        duration_ms: System.monotonic_time(:millisecond) - run.started_ms
       },
       metadata: %{origin: run.origin, reason: reason}
     )
