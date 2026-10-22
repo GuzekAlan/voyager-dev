@@ -23,15 +23,16 @@ defmodule Voyager.Services.TracerTest do
 
     assert {:ok, %{id: new_id, origin: :mcp, save: true}} = Tracer.create(:mcp, save: true)
     refute new_id == id
-    assert {%{id: ^new_id}, []} = Tracer.active()
+    assert %{id: ^new_id} = Tracer.active()
+    assert {:ok, %{entries: [], truncated?: false}} = Tracer.entries(new_id)
 
     assert [%{id: ^new_id}] = Tracer.sessions()
 
     assert :ok = Tracer.close()
     assert_receive {:session_closed, ^new_id}
-    assert {nil, []} = Tracer.active()
+    assert nil == Tracer.active()
     assert [] = Tracer.sessions()
-    assert {:error, :not_found} = Tracer.entries(new_id, 0, 10)
+    assert {:error, :not_found} = Tracer.entries(new_id)
     assert {:error, :no_session} = configure()
     assert {:error, :no_session} = Tracer.start(:ui)
   end
@@ -68,15 +69,22 @@ defmodule Voyager.Services.TracerTest do
                       }
                     ]}
 
-    assert {%{id: ^id, status: :stopped},
-            [%{kind: :stopped}, %{kind: :trace}, %{kind: :started}, %{kind: :configured}]} =
-             Tracer.active()
+    assert %{id: ^id, status: :stopped} = Tracer.active()
 
     assert {:ok,
-            %{entries: [%{seq: 1, kind: :started}, %{seq: 2, kind: :trace}], truncated?: false}} =
-             Tracer.entries(id, 1, 2)
+            %{
+              entries: [
+                %{kind: :stopped},
+                %{kind: :trace},
+                %{kind: :started},
+                %{kind: :configured}
+              ],
+              truncated?: false
+            }} = Tracer.entries(id)
 
-    assert {:ok, %{entries: [], truncated?: false}} = Tracer.entries(id, 4, 10)
+    assert {:ok, %{entries: [%{seq: 2}, %{seq: 1}]}} = Tracer.entries(id, before: 3, limit: 2)
+    assert {:ok, %{entries: [%{seq: 1}, %{seq: 2}]}} = Tracer.entries(id, since: 1, limit: 2)
+    assert {:ok, %{entries: [], truncated?: false}} = Tracer.entries(id, since: 4)
   end
 
   test "resumes a stopped session" do
@@ -91,7 +99,7 @@ defmodule Voyager.Services.TracerTest do
     Date.leap_year?(~D[2024-01-01])
     assert_receive {:session_log, %{id: ^id, events: 2}, [%{kind: :stopped}]}
 
-    assert {_session, entries} = Tracer.active()
+    assert {:ok, %{entries: entries}} = Tracer.entries(id)
 
     assert Enum.map(entries, &{&1.seq, &1.kind}) == [
              {6, :stopped},
@@ -174,14 +182,23 @@ defmodule Voyager.Services.TracerTest do
     for _ <- 1..501, do: Date.leap_year?(~D[2024-01-01])
 
     assert_receive {:session_log, %{events: 501}, [%{kind: :stopped}]}
-    assert {_session, [%{kind: :stopped} | entries]} = Tracer.active()
+
+    assert {:ok, %{entries: [%{kind: :stopped} | entries], truncated?: true}} =
+             Tracer.entries(session.id, limit: 1_000)
+
     assert [%{kind: :started}, %{kind: :configured}] = Enum.take(entries, -2)
     assert length(entries) == 502
 
-    assert {:ok, %{entries: [%{seq: 0}, %{seq: 1}, %{seq: 3, kind: :trace}], truncated?: true}} =
-             Tracer.entries(session.id, 0, 3)
+    assert {:ok, %{entries: [%{seq: 503} | _], truncated?: false}} = Tracer.entries(session.id)
 
-    assert {:ok, %{entries: [%{seq: 3}], truncated?: false}} = Tracer.entries(session.id, 3, 1)
+    assert {:ok, %{entries: [%{seq: 3}, %{seq: 1}, %{seq: 0}], truncated?: true}} =
+             Tracer.entries(session.id, before: 4, limit: 3)
+
+    assert {:ok, %{entries: [%{seq: 0}, %{seq: 1}, %{seq: 3}], truncated?: true}} =
+             Tracer.entries(session.id, since: 0, limit: 3)
+
+    assert {:ok, %{entries: [%{seq: 3}], truncated?: false}} =
+             Tracer.entries(session.id, since: 3, limit: 1)
   end
 
   test "logs the drops reported when the run ends" do

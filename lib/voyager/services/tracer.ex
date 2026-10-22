@@ -63,7 +63,7 @@ defmodule Voyager.Services.Tracer do
   """
   @spec start(origin()) :: {:ok, Session.t()} | {:error, term()}
   def start(origin) when origin in [:ui, :mcp] do
-    case GenServer.call(__MODULE__, :session) do
+    case active() do
       nil ->
         {:error, :no_session}
 
@@ -100,23 +100,31 @@ defmodule Voyager.Services.Tracer do
   @spec disconnected() :: :ok
   def disconnected, do: GenServer.cast(__MODULE__, :disconnected)
 
-  @doc "The active session and its kept entries, newest first."
-  @spec active() :: {Session.t() | nil, [map()]}
+  @spec active() :: Session.t() | nil
   def active, do: GenServer.call(__MODULE__, :active)
 
-  @doc "The sessions that can be read with `entries/3`."
+  @doc "The sessions that can be read with `entries/2`."
   @spec sessions() :: [Session.t()]
   def sessions, do: GenServer.call(__MODULE__, :sessions)
 
   @doc """
-  Up to `limit` entries of session `id` from `since_seq` on, oldest first.
-  `truncated?` says entries in that range were evicted from memory.
+  A page of up to `:limit` (100) entries of session `id` with `seq` in `[:since, :before)`.
+  With `:since` the page starts there, oldest first; without it the page is the newest
+  entries before `:before`, newest first. `truncated?` says entries in the range the page
+  covers were evicted from memory.
   """
-  @spec entries(pos_integer(), non_neg_integer(), pos_integer()) ::
+  @spec entries(pos_integer(),
+          since: non_neg_integer(),
+          before: non_neg_integer(),
+          limit: pos_integer()
+        ) ::
           {:ok, %{entries: [map()], truncated?: boolean()}} | {:error, :not_found}
-  def entries(id, since_seq, limit)
-      when is_integer(since_seq) and since_seq >= 0 and is_integer(limit) and limit > 0,
-      do: GenServer.call(__MODULE__, {:entries, id, since_seq, limit})
+  def entries(id, opts \\ []),
+    do:
+      GenServer.call(
+        __MODULE__,
+        {:entries, id, Keyword.validate!(opts, [:since, :before, limit: 100])}
+      )
 
   @impl true
   def init(nil),
@@ -215,24 +223,33 @@ defmodule Voyager.Services.Tracer do
 
   def handle_call({:stop, _origin}, _from, state), do: {:reply, :ok, state}
 
-  def handle_call(:session, _from, state), do: {:reply, state.session, state}
-
-  def handle_call(:active, _from, state),
-    do: {:reply, {state.session, Enum.sort_by(state.log ++ state.events, & &1.seq, :desc)}, state}
+  def handle_call(:active, _from, state), do: {:reply, state.session, state}
 
   def handle_call(:sessions, _from, state), do: {:reply, List.wrap(state.session), state}
 
-  def handle_call({:entries, id, since_seq, limit}, _from, %{session: %{id: id}} = state) do
-    entries =
-      (state.log ++ state.events)
-      |> Enum.filter(&(&1.seq >= since_seq))
-      |> Enum.sort_by(& &1.seq)
-      |> Enum.take(limit)
+  def handle_call({:entries, id, opts}, _from, %{session: %{id: id} = session} = state) do
+    since = Keyword.get(opts, :since, 0)
+    before = Keyword.get(opts, :before, session.seq)
+    order = if Keyword.has_key?(opts, :since), do: :asc, else: :desc
 
-    {:reply, {:ok, %{entries: entries, truncated?: since_seq <= state.evicted_upto}}, state}
+    page =
+      (state.log ++ state.events)
+      |> Enum.filter(&(&1.seq >= since and &1.seq < before))
+      |> Enum.sort_by(& &1.seq, order)
+      |> Enum.take(opts[:limit])
+
+    # A full page covers the range up to its last entry; a short one the whole range.
+    covered =
+      case {order, length(page) == opts[:limit]} do
+        {:asc, true} -> since..List.last(page).seq//1
+        {:desc, true} -> List.last(page).seq..(before - 1)//1
+        _short -> since..(before - 1)//1
+      end
+
+    {:reply, {:ok, %{entries: page, truncated?: evicted_in?(state, covered)}}, state}
   end
 
-  def handle_call({:entries, _id, _since_seq, _limit}, _from, state),
+  def handle_call({:entries, _id, _opts}, _from, state),
     do: {:reply, {:error, :not_found}, state}
 
   @impl true
@@ -323,6 +340,13 @@ defmodule Voyager.Services.Tracer do
   defp control(kind, origin, fields \\ []),
     do:
       Map.merge(%{kind: kind, origin: origin, at: System.os_time(:microsecond)}, Map.new(fields))
+
+  # Only trace and dropped entries are evicted, oldest first, so every seq up to
+  # `evicted_upto` that is not a kept control entry is gone.
+  defp evicted_in?(state, lo..hi//1) do
+    top = min(hi, state.evicted_upto)
+    top >= lo and top - lo + 1 > Enum.count(state.log, &(&1.seq in lo..top//1))
+  end
 
   defp dropped_entry(0), do: []
   defp dropped_entry(count), do: [control(:dropped, nil, count: count)]
