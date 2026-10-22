@@ -24,6 +24,7 @@ defmodule Voyager.Services.Tracer do
   @kept_events 500
   @max_mailbox 1_000
   @call_timeout Agent.default_timeout() + 1_000
+  @empty_log %{log: [], events: [], evicted_upto: -1}
 
   @type origin :: :ui | :mcp
 
@@ -82,9 +83,23 @@ defmodule Voyager.Services.Tracer do
   @spec active() :: {Session.t() | nil, [map()]}
   def active, do: GenServer.call(__MODULE__, :active)
 
+  @doc "The sessions that can be read with `entries/3`."
+  @spec sessions() :: [Session.t()]
+  def sessions, do: GenServer.call(__MODULE__, :sessions)
+
+  @doc """
+  Up to `limit` entries of session `id` from `since_seq` on, oldest first.
+  `truncated?` says entries in that range were evicted from memory.
+  """
+  @spec entries(pos_integer(), non_neg_integer(), pos_integer()) ::
+          {:ok, %{entries: [map()], truncated?: boolean()}} | {:error, :not_found}
+  def entries(id, since_seq, limit)
+      when is_integer(since_seq) and since_seq >= 0 and is_integer(limit) and limit > 0,
+      do: GenServer.call(__MODULE__, {:entries, id, since_seq, limit})
+
   @impl true
   def init(nil),
-    do: {:ok, %{session: nil, agent_args: nil, log: [], events: [], run: nil}}
+    do: {:ok, Map.merge(%{session: nil, agent_args: nil, run: nil}, @empty_log)}
 
   @impl true
   def handle_call(request, _from, %{session: %Session{status: :running}} = state)
@@ -101,14 +116,14 @@ defmodule Voyager.Services.Tracer do
     }
 
     broadcast({:session_created, session})
-    {:reply, {:ok, session}, %{state | session: session, agent_args: nil, log: [], events: []}}
+    {:reply, {:ok, session}, Map.merge(%{state | session: session, agent_args: nil}, @empty_log)}
   end
 
   def handle_call(:close, _from, %{session: nil} = state), do: {:reply, :ok, state}
 
   def handle_call(:close, _from, %{session: session} = state) do
     broadcast({:session_closed, session.id})
-    {:reply, :ok, %{state | session: nil, agent_args: nil, log: [], events: []}}
+    {:reply, :ok, Map.merge(%{state | session: nil, agent_args: nil}, @empty_log)}
   end
 
   def handle_call(request, _from, %{session: nil} = state)
@@ -179,6 +194,21 @@ defmodule Voyager.Services.Tracer do
 
   def handle_call(:active, _from, state),
     do: {:reply, {state.session, Enum.sort_by(state.log ++ state.events, & &1.seq, :desc)}, state}
+
+  def handle_call(:sessions, _from, state), do: {:reply, List.wrap(state.session), state}
+
+  def handle_call({:entries, id, since_seq, limit}, _from, %{session: %{id: id}} = state) do
+    entries =
+      (state.log ++ state.events)
+      |> Enum.filter(&(&1.seq >= since_seq))
+      |> Enum.sort_by(& &1.seq)
+      |> Enum.take(limit)
+
+    {:reply, {:ok, %{entries: entries, truncated?: since_seq <= state.evicted_upto}}, state}
+  end
+
+  def handle_call({:entries, _id, _since_seq, _limit}, _from, state),
+    do: {:reply, {:error, :not_found}, state}
 
   @impl true
   def handle_cast(:disconnected, %{session: %{status: :running}} = state),
@@ -280,11 +310,14 @@ defmodule Voyager.Services.Tracer do
 
     broadcast({:session_log, session, entries})
 
+    {events, evicted} = Enum.split(Enum.reverse(traces) ++ state.events, @kept_events)
+
     %{
       state
       | session: session,
         log: Enum.reverse(controls) ++ state.log,
-        events: Enum.take(Enum.reverse(traces) ++ state.events, @kept_events)
+        events: events,
+        evicted_upto: if(evicted == [], do: state.evicted_upto, else: hd(evicted).seq)
     }
   end
 

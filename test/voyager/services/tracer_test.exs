@@ -25,9 +25,13 @@ defmodule Voyager.Services.TracerTest do
     refute new_id == id
     assert {%{id: ^new_id}, []} = Tracer.active()
 
+    assert [%{id: ^new_id}] = Tracer.sessions()
+
     assert :ok = Tracer.close()
     assert_receive {:session_closed, ^new_id}
     assert {nil, []} = Tracer.active()
+    assert [] = Tracer.sessions()
+    assert {:error, :not_found} = Tracer.entries(new_id, 0, 10)
     assert {:error, :no_session} = configure()
     assert {:error, :no_session} = Tracer.start(:ui)
   end
@@ -67,6 +71,12 @@ defmodule Voyager.Services.TracerTest do
     assert {%{id: ^id, status: :stopped},
             [%{kind: :stopped}, %{kind: :trace}, %{kind: :started}, %{kind: :configured}]} =
              Tracer.active()
+
+    assert {:ok,
+            %{entries: [%{seq: 1, kind: :started}, %{seq: 2, kind: :trace}], truncated?: false}} =
+             Tracer.entries(id, 1, 2)
+
+    assert {:ok, %{entries: [], truncated?: false}} = Tracer.entries(id, 4, 10)
   end
 
   test "resumes a stopped session" do
@@ -137,7 +147,7 @@ defmodule Voyager.Services.TracerTest do
     assert_receive {:session_log, _session, [%{kind: :stopped, reason: {:tracer_down, :killed}}]}
   end
 
-  test "keeps every control entry but only the newest events" do
+  test "keeps every control entry but only the newest events", %{session: session} do
     assert {:ok, _session} = configure(%{max_events: 501})
     assert {:ok, _session} = Tracer.start(:ui)
 
@@ -147,6 +157,11 @@ defmodule Voyager.Services.TracerTest do
     assert {_session, [%{kind: :stopped} | entries]} = Tracer.active()
     assert [%{kind: :started}, %{kind: :configured}] = Enum.take(entries, -2)
     assert length(entries) == 502
+
+    assert {:ok, %{entries: [%{seq: 0}, %{seq: 1}, %{seq: 3, kind: :trace}], truncated?: true}} =
+             Tracer.entries(session.id, 0, 3)
+
+    assert {:ok, %{entries: [%{seq: 3}], truncated?: false}} = Tracer.entries(session.id, 3, 1)
   end
 
   test "logs batches dropped here and by the agent" do
