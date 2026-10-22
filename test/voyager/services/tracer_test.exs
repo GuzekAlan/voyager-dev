@@ -121,6 +121,20 @@ defmodule Voyager.Services.TracerTest do
     assert {:error, :noconnection} = Tracer.start(:ui)
   end
 
+  test "refuses to start a session reconfigured while its pids resolve" do
+    assert {:ok, _session} = configure()
+
+    :sys.suspend(Tracer)
+    start = Task.async(fn -> Tracer.start(:ui) end)
+    await_queued(1)
+    reconfigure = Task.async(fn -> configure(%{max_events: 5}) end)
+    await_queued(2)
+    :sys.resume(Tracer)
+
+    assert {:error, :changed} = Task.await(start)
+    assert {:ok, %{status: :idle}} = Task.await(reconfigure)
+  end
+
   test "refuses to start without a config" do
     assert {:error, :not_configured} = Tracer.start(:ui)
   end
@@ -168,6 +182,20 @@ defmodule Voyager.Services.TracerTest do
              Tracer.entries(session.id, 0, 3)
 
     assert {:ok, %{entries: [%{seq: 3}], truncated?: false}} = Tracer.entries(session.id, 3, 1)
+  end
+
+  test "logs the drops reported when the run ends" do
+    assert {:ok, _session} = configure()
+    assert {:ok, %{tracer: tracer}} = Tracer.start(:ui)
+    send(Tracer, {:voyager_trace_done, tracer, :time_limit, %{events: 0, dropped: 3}})
+
+    assert_receive {:session_log, %{dropped: 3},
+                    [
+                      %{kind: :dropped, count: 3},
+                      %{kind: :stopped, reason: :time_limit, dropped: 3}
+                    ]}
+
+    Process.exit(tracer, :kill)
   end
 
   test "logs batches dropped here and by the agent" do
@@ -220,6 +248,11 @@ defmodule Voyager.Services.TracerTest do
                     %{events: 0, dropped: 0, duration_ms: _}, %{origin: :ui, reason: :stopped}}
 
     assert_receive {:telemetry, [:voyager, :trace, :start_failed], _, %{origin: :mcp}}
+  end
+
+  defp await_queued(len) do
+    Stream.repeatedly(fn -> Process.info(Process.whereis(Tracer), :message_queue_len) end)
+    |> Enum.find(&(&1 == {:message_queue_len, len}))
   end
 
   def forward_telemetry(event, measurements, metadata, pid),
