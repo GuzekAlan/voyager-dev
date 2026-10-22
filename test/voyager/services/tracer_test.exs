@@ -14,11 +14,26 @@ defmodule Voyager.Services.TracerTest do
 
     Phoenix.PubSub.subscribe(Voyager.PubSub, Tracer.topic())
     on_exit(fn -> Tracer.stop() end)
-    :ok
+    {:ok, session} = Tracer.create(:ui)
+    %{session: session}
+  end
+
+  test "creates and closes the active session", %{session: %{id: id}} do
+    assert_receive {:session_created, %{id: ^id, origin: :ui, save: false, status: :idle}}
+
+    assert {:ok, %{id: new_id, origin: :mcp, save: true}} = Tracer.create(:mcp, save: true)
+    refute new_id == id
+    assert {%{id: ^new_id}, []} = Tracer.active()
+
+    assert :ok = Tracer.close()
+    assert_receive {:session_closed, ^new_id}
+    assert {nil, []} = Tracer.active()
+    assert {:error, :no_session} = configure()
+    assert {:error, :no_session} = Tracer.start()
   end
 
   test "broadcasts the configured session, its events and the stop" do
-    assert {:ok, %{id: id, origin: :ui, status: :configured}} = configure()
+    assert {:ok, %{id: id, origin: :ui, status: :idle}} = configure()
     assert_receive {:tracing_configured, %{id: ^id}}
 
     assert {:ok, %{id: ^id, status: :running}} = Tracer.start()
@@ -35,7 +50,7 @@ defmodule Voyager.Services.TracerTest do
     assert_receive {:tracing_ended,
                     %{id: ^id, status: :stopped, stop_reason: :stopped, ended_at: %DateTime{}}}
 
-    assert {%{id: ^id, status: :stopped}, [%{id: 0}]} = Tracer.current()
+    assert {%{id: ^id, status: :stopped}, [%{id: 0}]} = Tracer.active()
   end
 
   test "resumes a stopped session" do
@@ -47,7 +62,7 @@ defmodule Voyager.Services.TracerTest do
     assert {:ok, %{id: ^id, status: :running}} = Tracer.start()
     Date.leap_year?(~D[2024-01-01])
     assert_receive {:tracing_ended, %{id: ^id, events: 2}}
-    assert {_session, [%{id: 1}, %{id: 0}]} = Tracer.current()
+    assert {_session, [%{id: 1}, %{id: 0}]} = Tracer.active()
   end
 
   test "returns the config errors" do
@@ -57,20 +72,21 @@ defmodule Voyager.Services.TracerTest do
 
   test "resolves selected pids on the traced node" do
     attrs = %{module: "Elixir.Date", pids: ["<0.45.6>"], max_events: 1}
-    assert {:error, :noconnection} = Tracer.configure(:other@nohost, attrs, :ui)
+    assert {:error, :noconnection} = Tracer.configure(:other@nohost, attrs)
     refute_receive {:tracing_configured, _session}
   end
 
   test "refuses to start without a config" do
-    :sys.replace_state(Tracer, &%{&1 | session: nil})
     assert {:error, :not_configured} = Tracer.start()
   end
 
-  test "refuses to configure or start while running" do
+  test "refuses to change the session while running" do
     assert {:ok, _session} = configure()
     assert {:ok, _session} = Tracer.start()
     assert {:error, :busy} = Tracer.start()
     assert {:error, :busy} = configure()
+    assert {:error, :busy} = Tracer.create(:ui)
+    assert {:error, :busy} = Tracer.close()
   end
 
   test "ends a disconnected session when its tracer goes down" do
@@ -96,7 +112,7 @@ defmodule Voyager.Services.TracerTest do
     for _ <- 1..501, do: Date.leap_year?(~D[2024-01-01])
 
     assert_receive {:tracing_ended, %{id: ^id, events: 501}}
-    assert {_session, [%{id: 500} | _] = events} = Tracer.current()
+    assert {_session, [%{id: 500} | _] = events} = Tracer.active()
     assert length(events) == 500
   end
 
@@ -132,7 +148,8 @@ defmodule Voyager.Services.TracerTest do
     assert {:ok, _session} = configure()
     assert {:ok, _session} = Tracer.start()
     assert :ok = Tracer.stop()
-    assert {:ok, _session} = configure(%{module: "Elixir.Voyager.NoSuchModule"}, :mcp)
+    assert {:ok, _session} = Tracer.create(:mcp)
+    assert {:ok, _session} = configure(%{module: "Elixir.Voyager.NoSuchModule"})
     assert {:error, _reason} = Tracer.start()
 
     assert_receive {:telemetry, [:voyager, :trace, :start], _,
@@ -149,7 +166,7 @@ defmodule Voyager.Services.TracerTest do
   def forward_telemetry(event, measurements, metadata, pid),
     do: send(pid, {:telemetry, event, measurements, metadata})
 
-  defp configure(overrides \\ %{}, origin \\ :ui) do
+  defp configure(overrides \\ %{}) do
     attrs =
       Map.merge(
         %{
@@ -165,6 +182,6 @@ defmodule Voyager.Services.TracerTest do
         overrides
       )
 
-    Tracer.configure(Node.self(), attrs, origin)
+    Tracer.configure(Node.self(), attrs)
   end
 end

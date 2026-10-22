@@ -1,11 +1,12 @@
 defmodule Voyager.Services.Tracer do
   @moduledoc """
-  Owns the single tracing session of this Voyager instance; the UI and MCP both go through it.
+  Owns the active tracing session of this Voyager instance; the UI and MCP both go through it.
 
-  A session is configured once, then switched on and off with `start/0` and
+  A session is created, configured, then switched on and off with `start/0` and
   `stop/0`; starting a stopped session resumes it. The tracer on the remote node
   pushes event batches straight to this process. The newest events are kept in
   memory and everything is broadcast on `topic/0` as
+  `{:session_created, session}`, `{:session_closed, id}`,
   `{:tracing_configured, session}`, `{:tracing_started, session}`,
   `{:trace_events, session, events}` and `{:tracing_ended, session}`.
   """
@@ -14,6 +15,7 @@ defmodule Voyager.Services.Tracer do
 
   alias Voyager.Agent
   alias Voyager.Services.Tracer.Config
+  alias Voyager.Services.Tracer.Session
 
   @topic "tracing"
   @kept_events 500
@@ -22,44 +24,36 @@ defmodule Voyager.Services.Tracer do
 
   @type origin :: :ui | :mcp
 
-  @type session :: %{
-          id: pos_integer(),
-          node: node(),
-          config: Config.t(),
-          origin: origin(),
-          tracer: pid() | nil,
-          status: :configured | :running | :stopped,
-          stop_reason: term(),
-          events: non_neg_integer(),
-          dropped: non_neg_integer(),
-          started_at: DateTime.t() | nil,
-          ended_at: DateTime.t() | nil
-        }
-
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
   @spec topic() :: String.t()
   def topic, do: @topic
 
+  @doc "Replaces the active session with a new, unconfigured one. Returns `{:error, :busy}` while it runs."
+  @spec create(origin(), save: boolean()) :: {:ok, Session.t()} | {:error, :busy}
+  def create(origin, opts \\ []) when origin in [:ui, :mcp],
+    do: GenServer.call(__MODULE__, {:create, origin, Keyword.get(opts, :save, false)})
+
+  @doc "Closes the active session. Returns `{:error, :busy}` while it runs."
+  @spec close() :: :ok | {:error, :busy}
+  def close, do: GenServer.call(__MODULE__, :close)
+
   @doc """
-  Replaces the session with a new one tracing `node` with `attrs` (see `Config`).
-  Selected pids are resolved on `node` in the caller. Returns `{:error, :busy}` while a session runs.
+  Sets the active session to trace `node` with `attrs` (see `Config`).
+  Selected pids are resolved on `node` in the caller. Returns `{:error, :busy}` while it runs.
   """
-  @spec configure(node(), map(), origin()) ::
-          {:ok, session()} | {:error, :busy | Ecto.Changeset.t() | term()}
-  def configure(node, attrs, origin) when origin in [:ui, :mcp] do
+  @spec configure(node(), map()) ::
+          {:ok, Session.t()} | {:error, :no_session | :busy | Ecto.Changeset.t() | term()}
+  def configure(node, attrs) do
     with {:ok, config} <- attrs |> Config.changeset() |> Ecto.Changeset.apply_action(:validate),
          {:ok, pids} <- resolve_pids(node, config) do
-      GenServer.call(
-        __MODULE__,
-        {:configure, node, config, Config.to_agent(config, pids), origin}
-      )
+      GenServer.call(__MODULE__, {:configure, node, config, Config.to_agent(config, pids)})
     end
   end
 
   @doc "Starts or resumes the configured session; the agent's refusals come back as `{:error, reason}`."
-  @spec start() :: {:ok, session()} | {:error, term()}
+  @spec start() :: {:ok, Session.t()} | {:error, term()}
   def start, do: GenServer.call(__MODULE__, :start, @call_timeout)
 
   @doc """
@@ -76,46 +70,53 @@ defmodule Voyager.Services.Tracer do
   @spec disconnected() :: :ok
   def disconnected, do: GenServer.cast(__MODULE__, :disconnected)
 
-  @doc "The session and its kept events, newest first."
-  @spec current() :: {session() | nil, [map()]}
-  def current, do: GenServer.call(__MODULE__, :current)
+  @doc "The active session and its kept events, newest first."
+  @spec active() :: {Session.t() | nil, [map()]}
+  def active, do: GenServer.call(__MODULE__, :active)
 
   @impl true
   def init(nil),
     do: {:ok, %{session: nil, agent_args: nil, events: [], run: nil}}
 
   @impl true
-  def handle_call(
-        {:configure, _node, _config, _args, _origin},
-        _from,
-        %{session: %{status: :running}} = state
-      ),
+  def handle_call(request, _from, %{session: %Session{status: :running}} = state)
+      when request in [:start, :close] or
+             (is_tuple(request) and elem(request, 0) in [:create, :configure]),
       do: {:reply, {:error, :busy}, state}
 
-  def handle_call({:configure, node, config, agent_args, origin}, _from, state) do
-    session = %{
+  def handle_call({:create, origin, save}, _from, state) do
+    session = %Session{
       id: System.unique_integer([:positive]),
-      node: node,
-      config: config,
       origin: origin,
-      tracer: nil,
-      status: :configured,
-      stop_reason: nil,
-      events: 0,
-      dropped: 0,
-      started_at: nil,
-      ended_at: nil
+      save: save,
+      created_at: DateTime.utc_now()
     }
 
+    broadcast({:session_created, session})
+    {:reply, {:ok, session}, %{state | session: session, agent_args: nil, events: []}}
+  end
+
+  def handle_call(:close, _from, %{session: nil} = state), do: {:reply, :ok, state}
+
+  def handle_call(:close, _from, %{session: session} = state) do
+    broadcast({:session_closed, session.id})
+    {:reply, :ok, %{state | session: nil, agent_args: nil, events: []}}
+  end
+
+  def handle_call({:configure, _node, _config, _agent_args}, _from, %{session: nil} = state),
+    do: {:reply, {:error, :no_session}, state}
+
+  def handle_call({:configure, node, config, agent_args}, _from, state) do
+    session = %{state.session | node: node, config: config}
     broadcast({:tracing_configured, session})
-    {:reply, {:ok, session}, %{state | session: session, agent_args: agent_args, events: []}}
+    {:reply, {:ok, session}, %{state | session: session, agent_args: agent_args}}
   end
 
   def handle_call(:start, _from, %{session: nil} = state),
-    do: {:reply, {:error, :not_configured}, state}
+    do: {:reply, {:error, :no_session}, state}
 
-  def handle_call(:start, _from, %{session: %{status: :running}} = state),
-    do: {:reply, {:error, :busy}, state}
+  def handle_call(:start, _from, %{session: %Session{config: nil}} = state),
+    do: {:reply, {:error, :not_configured}, state}
 
   def handle_call(:start, _from, %{session: session} = state) do
     {spec, limits} = state.agent_args
@@ -168,7 +169,7 @@ defmodule Voyager.Services.Tracer do
 
   def handle_call(:stop, _from, state), do: {:reply, :ok, state}
 
-  def handle_call(:current, _from, state), do: {:reply, {state.session, state.events}, state}
+  def handle_call(:active, _from, state), do: {:reply, {state.session, state.events}, state}
 
   @impl true
   def handle_cast(:disconnected, %{session: %{status: :running}} = state),
