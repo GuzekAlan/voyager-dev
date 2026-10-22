@@ -1,5 +1,5 @@
 defmodule Voyager.Services.Tracer.Session do
-  @moduledoc "The `Voyager.Services.Tracer` session: a node and config, plus the state of its runs. `seq` numbers the next log entry."
+  @moduledoc "The `Voyager.Services.Tracer` session: a node and config, plus the state of its runs. `seq` numbers the next log entry; `started_at` is the first run's start and `stopped_at` the last run's end."
 
   alias Voyager.Services.Tracer.Config
 
@@ -13,10 +13,10 @@ defmodule Voyager.Services.Tracer.Session do
     :tracer,
     :stop_reason,
     :started_at,
-    :ended_at,
+    :stopped_at,
     save: false,
     status: :idle,
-    events: 0,
+    traces: 0,
     dropped: 0,
     seq: 0
   ]
@@ -31,10 +31,10 @@ defmodule Voyager.Services.Tracer.Session do
           tracer: pid() | nil,
           status: :idle | :running | :stopped,
           stop_reason: term(),
-          events: non_neg_integer(),
+          traces: non_neg_integer(),
           dropped: non_neg_integer(),
           seq: non_neg_integer(),
           started_at: DateTime.t() | nil,
-          ended_at: DateTime.t() | nil
+          stopped_at: DateTime.t() | nil
         }
 end

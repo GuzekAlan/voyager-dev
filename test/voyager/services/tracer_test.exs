@@ -26,12 +26,9 @@ defmodule Voyager.Services.TracerTest do
     assert %{id: ^new_id} = Tracer.active()
     assert {:ok, %{entries: [], truncated?: false}} = Tracer.entries(new_id)
 
-    assert [%{id: ^new_id}] = Tracer.sessions()
-
     assert :ok = Tracer.close()
     assert_receive {:session_closed, ^new_id}
     assert nil == Tracer.active()
-    assert [] = Tracer.sessions()
     assert {:error, :not_found} = Tracer.entries(new_id)
     assert {:error, :no_session} = configure()
     assert {:error, :no_session} = Tracer.start(:ui)
@@ -40,31 +37,33 @@ defmodule Voyager.Services.TracerTest do
   test "logs the configure, the events and the stop with their origins" do
     assert {:ok, %{id: id, status: :idle}} = configure(%{}, :mcp)
 
-    assert_receive {:session_log, %{id: ^id},
+    assert_receive {:session_entries, %{id: ^id},
                     [%{seq: 0, kind: :configured, origin: :mcp, node: node, config: _config}]}
 
     assert node == Node.self()
 
     assert {:ok, %{id: ^id, status: :running}} = Tracer.start(:ui)
-    assert_receive {:session_log, %{status: :running}, [%{seq: 1, kind: :started, origin: :ui}]}
+
+    assert_receive {:session_entries, %{status: :running},
+                    [%{seq: 1, kind: :started, origin: :ui}]}
 
     Date.leap_year?(~D[2024-01-01])
 
-    assert_receive {:session_log, %{events: 1},
+    assert_receive {:session_entries, %{traces: 1},
                     [%{seq: 2, kind: :trace, type: :call, mfa: {Date, :leap_year?, 1}}]},
                    1_000
 
     assert :ok = Tracer.stop(:mcp)
 
-    assert_receive {:session_log,
-                    %{status: :stopped, stop_reason: :stopped, ended_at: %DateTime{}},
+    assert_receive {:session_entries,
+                    %{status: :stopped, stop_reason: :stopped, stopped_at: %DateTime{}},
                     [
                       %{
                         seq: 3,
                         kind: :stopped,
                         origin: :mcp,
                         reason: :stopped,
-                        events: 1,
+                        traces: 1,
                         dropped: 0
                       }
                     ]}
@@ -92,12 +91,12 @@ defmodule Voyager.Services.TracerTest do
     assert {:ok, _session} = Tracer.start(:ui)
     Date.leap_year?(~D[2024-01-01])
 
-    assert_receive {:session_log, %{id: ^id},
+    assert_receive {:session_entries, %{id: ^id},
                     [%{kind: :stopped, origin: nil, reason: :event_limit}]}
 
     assert {:ok, %{id: ^id, status: :running}} = Tracer.start(:ui)
     Date.leap_year?(~D[2024-01-01])
-    assert_receive {:session_log, %{id: ^id, events: 2}, [%{kind: :stopped}]}
+    assert_receive {:session_entries, %{id: ^id, traces: 2}, [%{kind: :stopped}]}
 
     assert {:ok, %{entries: entries}} = Tracer.entries(id)
 
@@ -114,13 +113,13 @@ defmodule Voyager.Services.TracerTest do
 
   test "returns the config errors" do
     assert {:error, %Ecto.Changeset{valid?: false}} = configure(%{module: nil})
-    refute_receive {:session_log, _session, _entries}
+    refute_receive {:session_entries, _session, _entries}
   end
 
   test "resolves selected pids on the traced node" do
     attrs = %{module: "Elixir.Date", pids: ["<0.45.6>"], max_events: 1}
     assert {:error, :noconnection} = Tracer.configure(:other@nohost, attrs, :ui)
-    refute_receive {:session_log, _session, _entries}
+    refute_receive {:session_entries, _session, _entries}
   end
 
   test "resolves the pids again on start" do
@@ -159,11 +158,11 @@ defmodule Voyager.Services.TracerTest do
   test "ends a disconnected session when its tracer goes down" do
     assert {:ok, _session} = configure()
     assert {:ok, %{tracer: tracer}} = Tracer.start(:ui)
-    assert :ok = Tracer.disconnected()
+    assert :ok = Tracer.disconnecting()
     _ = :sys.get_state(Tracer)
     Process.exit(tracer, :noconnection)
 
-    assert_receive {:session_log, %{stop_reason: :disconnected},
+    assert_receive {:session_entries, %{stop_reason: :disconnected},
                     [%{kind: :stopped, origin: nil, reason: :disconnected}]}
   end
 
@@ -172,7 +171,8 @@ defmodule Voyager.Services.TracerTest do
     assert {:ok, %{tracer: tracer}} = Tracer.start(:ui)
     Process.exit(tracer, :kill)
 
-    assert_receive {:session_log, _session, [%{kind: :stopped, reason: {:tracer_down, :killed}}]}
+    assert_receive {:session_entries, _session,
+                    [%{kind: :stopped, reason: {:tracer_down, :killed}}]}
   end
 
   test "keeps every control entry but only the newest events", %{session: session} do
@@ -181,7 +181,7 @@ defmodule Voyager.Services.TracerTest do
 
     for _ <- 1..501, do: Date.leap_year?(~D[2024-01-01])
 
-    assert_receive {:session_log, %{events: 501}, [%{kind: :stopped}]}
+    assert_receive {:session_entries, %{traces: 501}, [%{kind: :stopped}]}
 
     assert {:ok, %{entries: [%{kind: :stopped} | entries], truncated?: true}} =
              Tracer.entries(session.id, limit: 1_000)
@@ -204,9 +204,9 @@ defmodule Voyager.Services.TracerTest do
   test "logs the drops reported when the run ends" do
     assert {:ok, _session} = configure()
     assert {:ok, %{tracer: tracer}} = Tracer.start(:ui)
-    send(Tracer, {:voyager_trace_done, tracer, :time_limit, %{events: 0, dropped: 3}})
+    send(Tracer, {:voyager_trace_done, tracer, :time_limit, %{traces: 0, dropped: 3}})
 
-    assert_receive {:session_log, %{dropped: 3},
+    assert_receive {:session_entries, %{dropped: 3},
                     [
                       %{kind: :dropped, count: 3},
                       %{kind: :stopped, reason: :time_limit, dropped: 3}
@@ -223,20 +223,24 @@ defmodule Voyager.Services.TracerTest do
     for _ <- 1..1_005, do: send(Tracer, {:voyager_trace_events, tracer, [%{}], 0})
     :sys.resume(Tracer)
 
-    assert_receive {:session_log, %{events: 0, dropped: 1}, [%{seq: 2, kind: :dropped, count: 1}]}
-    assert_receive {:session_log, %{events: 0, dropped: 4}, [%{seq: 5, kind: :dropped, count: 1}]}
-    assert_receive {:session_log, %{events: 1_001, dropped: 4}, [%{seq: 1_006, kind: :trace}]}
+    assert_receive {:session_entries, %{traces: 0, dropped: 1},
+                    [%{seq: 2, kind: :dropped, count: 1}]}
+
+    assert_receive {:session_entries, %{traces: 0, dropped: 4},
+                    [%{seq: 5, kind: :dropped, count: 1}]}
+
+    assert_receive {:session_entries, %{traces: 1_001, dropped: 4}, [%{seq: 1_006, kind: :trace}]}
 
     send(Tracer, {:voyager_trace_events, tracer, [%{}], 2})
 
-    assert_receive {:session_log, %{dropped: 6},
+    assert_receive {:session_entries, %{dropped: 6},
                     [%{seq: 1_007, kind: :dropped, count: 2}, %{seq: 1_008, kind: :trace}]}
   end
 
   test "returns the agent's refusal on start" do
     assert {:ok, _session} = configure(%{module: "Elixir.Voyager.NoSuchModule"})
     assert {:error, :unknown_function} = Tracer.start(:ui)
-    refute_receive {:session_log, %{status: :running}, _entries}
+    refute_receive {:session_entries, %{status: :running}, _entries}
   end
 
   test "emits telemetry without the traced function" do

@@ -11,7 +11,7 @@ defmodule Voyager.Services.Tracer do
   since the previous entry). The configured, started and stopped entries and the
   newest trace and dropped entries are kept in memory. Broadcasts on `topic/0` are
   `{:session_created, session}`, `{:session_closed, id}` and
-  `{:session_log, session, entries}` with the entries just appended, oldest first.
+  `{:session_entries, session, entries}` with the entries just appended, oldest first.
   """
 
   use GenServer
@@ -21,10 +21,10 @@ defmodule Voyager.Services.Tracer do
   alias Voyager.Services.Tracer.Session
 
   @topic "tracing"
-  @kept_events 500
+  @kept_traces 500
   @max_mailbox 1_000
   @call_timeout Agent.default_timeout() + 1_000
-  @empty_log %{log: [], events: [], evicted_upto: -1}
+  @empty_buffer %{controls: [], traces: [], evicted_upto: -1}
 
   @type origin :: :ui | :mcp
 
@@ -97,15 +97,11 @@ defmodule Voyager.Services.Tracer do
   Ends a running session with `:disconnected` once its tracer goes down, without calling the node.
   The remote tracer stops by itself when this node disconnects.
   """
-  @spec disconnected() :: :ok
-  def disconnected, do: GenServer.cast(__MODULE__, :disconnected)
+  @spec disconnecting() :: :ok
+  def disconnecting, do: GenServer.cast(__MODULE__, :disconnecting)
 
   @spec active() :: Session.t() | nil
   def active, do: GenServer.call(__MODULE__, :active)
-
-  @doc "The sessions that can be read with `entries/2`."
-  @spec sessions() :: [Session.t()]
-  def sessions, do: GenServer.call(__MODULE__, :sessions)
 
   @doc """
   A page of up to `:limit` (100) entries of session `id` with `seq` in `[:since, :before)`.
@@ -128,7 +124,7 @@ defmodule Voyager.Services.Tracer do
 
   @impl true
   def init(nil),
-    do: {:ok, Map.merge(%{session: nil, run: nil}, @empty_log)}
+    do: {:ok, Map.merge(%{session: nil, run: nil}, @empty_buffer)}
 
   @impl true
   def handle_call(request, _from, %{session: %Session{status: :running}} = state)
@@ -145,14 +141,14 @@ defmodule Voyager.Services.Tracer do
     }
 
     broadcast({:session_created, session})
-    {:reply, {:ok, session}, Map.merge(%{state | session: session}, @empty_log)}
+    {:reply, {:ok, session}, Map.merge(%{state | session: session}, @empty_buffer)}
   end
 
   def handle_call(:close, _from, %{session: nil} = state), do: {:reply, :ok, state}
 
   def handle_call(:close, _from, %{session: session} = state) do
     broadcast({:session_closed, session.id})
-    {:reply, :ok, Map.merge(%{state | session: nil}, @empty_log)}
+    {:reply, :ok, Map.merge(%{state | session: nil}, @empty_buffer)}
   end
 
   def handle_call(request, _from, %{session: nil} = state)
@@ -162,7 +158,7 @@ defmodule Voyager.Services.Tracer do
   def handle_call({:configure, node, config, origin}, _from, state) do
     state =
       %{state | session: %{state.session | node: node, config: config}}
-      |> append([control(:configured, origin, node: node, config: config)])
+      |> append([entry(:configured, origin, node: node, config: config)])
 
     {:reply, {:ok, state.session}, state}
   end
@@ -182,7 +178,7 @@ defmodule Voyager.Services.Tracer do
             status: :running,
             stop_reason: nil,
             started_at: session.started_at || DateTime.utc_now(),
-            ended_at: nil
+            stopped_at: nil
         }
 
         Voyager.Telemetry.dispatch!("voyager.trace.start",
@@ -194,14 +190,14 @@ defmodule Voyager.Services.Tracer do
 
         run = %{
           origin: origin,
-          events: session.events,
-          dropped: session.dropped,
-          dropped_here: 0,
-          stopping: nil,
-          at: System.monotonic_time()
+          traces_before: session.traces,
+          dropped_before: session.dropped,
+          shed: 0,
+          stop_request: nil,
+          started_mono: System.monotonic_time()
         }
 
-        state = append(%{state | session: session, run: run}, [control(:started, origin)])
+        state = append(%{state | session: session, run: run}, [entry(:started, origin)])
         {:reply, {:ok, state.session}, state}
 
       {:ok, {:error, reason}} ->
@@ -218,14 +214,12 @@ defmodule Voyager.Services.Tracer do
   # The session ends on the tracer's done message or its DOWN, never on this reply.
   def handle_call({:stop, origin}, _from, %{session: %{status: :running} = session} = state) do
     Agent.call(session.node, :trace_stop, [session.tracer], Agent.default_timeout())
-    {:reply, :ok, %{state | run: %{state.run | stopping: {:stopped, origin}}}}
+    {:reply, :ok, %{state | run: %{state.run | stop_request: {:stopped, origin}}}}
   end
 
   def handle_call({:stop, _origin}, _from, state), do: {:reply, :ok, state}
 
   def handle_call(:active, _from, state), do: {:reply, state.session, state}
-
-  def handle_call(:sessions, _from, state), do: {:reply, List.wrap(state.session), state}
 
   def handle_call({:entries, id, opts}, _from, %{session: %{id: id} = session} = state) do
     since = Keyword.get(opts, :since, 0)
@@ -233,7 +227,7 @@ defmodule Voyager.Services.Tracer do
     order = if Keyword.has_key?(opts, :since), do: :asc, else: :desc
 
     page =
-      (state.log ++ state.events)
+      (state.controls ++ state.traces)
       |> Enum.filter(&(&1.seq >= since and &1.seq < before))
       |> Enum.sort_by(& &1.seq, order)
       |> Enum.take(opts[:limit])
@@ -253,27 +247,27 @@ defmodule Voyager.Services.Tracer do
     do: {:reply, {:error, :not_found}, state}
 
   @impl true
-  def handle_cast(:disconnected, %{session: %{status: :running}} = state),
-    do: {:noreply, %{state | run: %{state.run | stopping: {:disconnected, nil}}}}
+  def handle_cast(:disconnecting, %{session: %{status: :running}} = state),
+    do: {:noreply, %{state | run: %{state.run | stop_request: {:disconnected, nil}}}}
 
-  def handle_cast(:disconnected, state), do: {:noreply, state}
+  def handle_cast(:disconnecting, state), do: {:noreply, state}
 
   @impl true
   def handle_info(
         {:voyager_trace_events, tracer, events, agent_dropped},
         %{session: %{tracer: tracer, status: :running} = session, run: run} = state
       ) do
-    {events, dropped_here} =
+    {events, shed} =
       if overloaded?(),
-        do: {[], run.dropped_here + length(events)},
-        else: {events, run.dropped_here}
+        do: {[], run.shed + length(events)},
+        else: {events, run.shed}
 
-    dropped = run.dropped + agent_dropped + dropped_here
+    dropped = run.dropped_before + agent_dropped + shed
 
-    session = %{session | events: session.events + length(events), dropped: dropped}
+    session = %{session | traces: session.traces + length(events), dropped: dropped}
 
     state =
-      %{state | session: session, run: %{run | dropped_here: dropped_here}}
+      %{state | session: session, run: %{run | shed: shed}}
       |> append(
         dropped_entry(dropped - state.session.dropped) ++
           Enum.map(events, &Map.put(&1, :kind, :trace))
@@ -286,38 +280,42 @@ defmodule Voyager.Services.Tracer do
         {:voyager_trace_done, tracer, reason, %{dropped: dropped}},
         %{session: %{tracer: tracer, status: :running}} = state
       ) do
-    {:noreply, finish(state, reason, state.run.dropped + dropped + state.run.dropped_here)}
+    {:noreply, end_run(state, reason, state.run.dropped_before + dropped + state.run.shed)}
   end
 
   def handle_info(
         {:DOWN, _ref, :process, tracer, reason},
         %{session: %{tracer: tracer, status: :running} = session} = state
       ) do
-    {:noreply, finish(state, down_reason(reason), session.dropped)}
+    {:noreply, end_run(state, down_reason(reason), session.dropped)}
   end
 
   def handle_info(_stale, state), do: {:noreply, state}
 
-  defp finish(%{run: run} = state, reason, dropped) do
-    {reason, origin} = run.stopping || {reason, nil}
+  defp end_run(%{run: run} = state, reason, dropped) do
+    {reason, origin} = run.stop_request || {reason, nil}
 
     session = %{
       state.session
       | status: :stopped,
         stop_reason: reason,
         dropped: dropped,
-        ended_at: DateTime.utc_now()
+        stopped_at: DateTime.utc_now()
     }
 
-    run_events = session.events - run.events
-    run_dropped = session.dropped - run.dropped
+    run_traces = session.traces - run.traces_before
+    run_dropped = session.dropped - run.dropped_before
 
     Voyager.Telemetry.dispatch!("voyager.trace.stop",
       measurements: %{
-        events: run_events,
+        events: run_traces,
         dropped: run_dropped,
         duration_ms:
-          System.convert_time_unit(System.monotonic_time() - run.at, :native, :millisecond)
+          System.convert_time_unit(
+            System.monotonic_time() - run.started_mono,
+            :native,
+            :millisecond
+          )
       },
       metadata: %{origin: run.origin, reason: reason}
     )
@@ -325,7 +323,7 @@ defmodule Voyager.Services.Tracer do
     append(
       %{state | session: session, run: nil},
       dropped_entry(session.dropped - state.session.dropped) ++
-        [control(:stopped, origin, reason: reason, events: run_events, dropped: run_dropped)]
+        [entry(:stopped, origin, reason: reason, traces: run_traces, dropped: run_dropped)]
     )
   end
 
@@ -337,7 +335,7 @@ defmodule Voyager.Services.Tracer do
     {:error, reason}
   end
 
-  defp control(kind, origin, fields \\ []),
+  defp entry(kind, origin, fields \\ []),
     do:
       Map.merge(%{kind: kind, origin: origin, at: System.os_time(:microsecond)}, Map.new(fields))
 
@@ -345,27 +343,27 @@ defmodule Voyager.Services.Tracer do
   # `evicted_upto` that is not a kept control entry is gone.
   defp evicted_in?(state, lo..hi//1) do
     top = min(hi, state.evicted_upto)
-    top >= lo and top - lo + 1 > Enum.count(state.log, &(&1.seq in lo..top//1))
+    top >= lo and top - lo + 1 > Enum.count(state.controls, &(&1.seq in lo..top//1))
   end
 
   defp dropped_entry(0), do: []
-  defp dropped_entry(count), do: [control(:dropped, nil, count: count)]
+  defp dropped_entry(count), do: [entry(:dropped, nil, count: count)]
 
-  # Dropped entries come with every shed batch, so they are capped with the trace events.
+  # Dropped entries come with every shed batch, so they are capped with the traces.
   defp append(%{session: session} = state, entries) do
     entries = Enum.with_index(entries, &Map.put(&1, :seq, session.seq + &2))
     session = %{session | seq: session.seq + length(entries)}
     {traces, controls} = Enum.split_with(entries, &(&1.kind in [:trace, :dropped]))
 
-    broadcast({:session_log, session, entries})
+    broadcast({:session_entries, session, entries})
 
-    {events, evicted} = Enum.split(Enum.reverse(traces) ++ state.events, @kept_events)
+    {kept, evicted} = Enum.split(Enum.reverse(traces) ++ state.traces, @kept_traces)
 
     %{
       state
       | session: session,
-        log: Enum.reverse(controls) ++ state.log,
-        events: events,
+        controls: Enum.reverse(controls) ++ state.controls,
+        traces: kept,
         evicted_upto: if(evicted == [], do: state.evicted_upto, else: hd(evicted).seq)
     }
   end
