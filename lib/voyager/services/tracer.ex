@@ -18,15 +18,44 @@ defmodule Voyager.Services.Tracer do
 
   alias Voyager.Agent
   alias Voyager.Services.Tracer.Config
+  alias Voyager.Services.Tracer.Run
   alias Voyager.Services.Tracer.Session
 
   @topic "tracing"
   @kept_traces 500
   @max_mailbox 1_000
   @call_timeout Agent.default_timeout() + 1_000
-  @empty_buffer %{controls: [], traces: [], evicted_upto: -1}
 
   @type origin :: :ui | :mcp
+
+  @type stop_reason ::
+          :stopped
+          | :disconnected
+          | :event_limit
+          | :rate_limit
+          | :time_limit
+          | :mailbox_limit
+          | :node_down
+          | {:tracer_down, term()}
+
+  @type entry :: %{
+          required(:seq) => non_neg_integer(),
+          required(:kind) => :configured | :started | :stopped | :dropped | :trace,
+          required(:at) => integer(),
+          optional(atom()) => term()
+        }
+
+  # `controls` keeps every configured/started/stopped entry, `traces` the newest
+  # trace and dropped entries; both newest first.
+  defstruct session: nil, run: nil, controls: [], traces: [], evicted_upto: -1
+
+  @typep state :: %__MODULE__{
+           session: Session.t() | nil,
+           run: Run.t() | nil,
+           controls: [entry()],
+           traces: [entry()],
+           evicted_upto: integer()
+         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
@@ -114,7 +143,7 @@ defmodule Voyager.Services.Tracer do
           before: non_neg_integer(),
           limit: pos_integer()
         ) ::
-          {:ok, %{entries: [map()], truncated?: boolean()}} | {:error, :not_found}
+          {:ok, %{entries: [entry()], truncated?: boolean()}} | {:error, :not_found}
   def entries(id, opts \\ []),
     do:
       GenServer.call(
@@ -123,8 +152,7 @@ defmodule Voyager.Services.Tracer do
       )
 
   @impl true
-  def init(nil),
-    do: {:ok, Map.merge(%{session: nil, run: nil}, @empty_buffer)}
+  def init(nil), do: {:ok, %__MODULE__{}}
 
   @impl true
   def handle_call(request, _from, %{session: %Session{status: :running}} = state)
@@ -132,7 +160,7 @@ defmodule Voyager.Services.Tracer do
              (is_tuple(request) and elem(request, 0) in [:create, :configure, :start]),
       do: {:reply, {:error, :busy}, state}
 
-  def handle_call({:create, origin, save}, _from, state) do
+  def handle_call({:create, origin, save}, _from, _state) do
     session = %Session{
       id: System.unique_integer([:positive]),
       origin: origin,
@@ -141,14 +169,14 @@ defmodule Voyager.Services.Tracer do
     }
 
     broadcast({:session_created, session})
-    {:reply, {:ok, session}, Map.merge(%{state | session: session}, @empty_buffer)}
+    {:reply, {:ok, session}, %__MODULE__{session: session}}
   end
 
   def handle_call(:close, _from, %{session: nil} = state), do: {:reply, :ok, state}
 
-  def handle_call(:close, _from, %{session: session} = state) do
+  def handle_call(:close, _from, %{session: session}) do
     broadcast({:session_closed, session.id})
-    {:reply, :ok, Map.merge(%{state | session: nil}, @empty_buffer)}
+    {:reply, :ok, %__MODULE__{}}
   end
 
   def handle_call(request, _from, %{session: nil} = state)
@@ -188,16 +216,16 @@ defmodule Voyager.Services.Tracer do
             |> Map.put(:origin, origin)
         )
 
-        run = %{
+        run = %Run{
           origin: origin,
           traces_before: session.traces,
           dropped_before: session.dropped,
-          shed: 0,
-          stop_request: nil,
           started_ms: System.monotonic_time(:millisecond)
         }
 
-        state = append(%{state | session: session, run: run}, [entry(:started, origin)])
+        state =
+          append(%{state | session: session, run: run}, [entry(:started, origin)])
+
         {:reply, {:ok, state.session}, state}
 
       {:ok, {:error, reason}} ->
@@ -292,6 +320,7 @@ defmodule Voyager.Services.Tracer do
 
   def handle_info(_stale, state), do: {:noreply, state}
 
+  @spec end_run(state(), stop_reason(), non_neg_integer()) :: state()
   defp end_run(%{run: run} = state, reason, dropped) do
     {reason, origin} = run.stop_request || {reason, nil}
 
@@ -336,6 +365,7 @@ defmodule Voyager.Services.Tracer do
 
   # Only trace and dropped entries are evicted, oldest first, so every seq up to
   # `evicted_upto` that is not a kept control entry is gone.
+  @spec evicted_in?(state(), Range.t()) :: boolean()
   defp evicted_in?(state, lo..hi//1) do
     top = min(hi, state.evicted_upto)
     top >= lo and top - lo + 1 > Enum.count(state.controls, &(&1.seq in lo..top//1))
@@ -345,10 +375,13 @@ defmodule Voyager.Services.Tracer do
   defp dropped_entry(count), do: [entry(:dropped, nil, count: count)]
 
   # Dropped entries come with every shed batch, so they are capped with the traces.
-  defp append(%{session: session} = state, entries) do
+  @spec append(state(), [entry()]) :: state()
+  defp append(%__MODULE__{session: session} = state, entries) do
     entries = Enum.with_index(entries, &Map.put(&1, :seq, session.seq + &2))
     session = %{session | seq: session.seq + length(entries)}
-    {traces, controls} = Enum.split_with(entries, &(&1.kind in [:trace, :dropped]))
+
+    {traces, controls} =
+      Enum.split_with(entries, &(&1.kind in [:trace, :dropped]))
 
     broadcast({:session_entries, session, entries})
 
