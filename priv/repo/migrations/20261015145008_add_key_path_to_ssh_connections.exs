@@ -1,4 +1,4 @@
-defmodule Voyager.Repo.Migrations.AddKeyFileToSshConnections do
+defmodule Voyager.Repo.Migrations.AddKeyPathToSshConnections do
   use Ecto.Migration
 
   def change do
