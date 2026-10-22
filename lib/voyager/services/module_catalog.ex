@@ -53,23 +53,33 @@ defmodule Voyager.Services.ModuleCatalog do
   @doc "Drops everything cached for `node`, so the next lookup refetches."
   @spec refresh(node()) :: :ok
   def refresh(node) do
-    :ets.match_delete(@table, {{node, :_}, :_, :_})
+    :ets.update_counter(@table, {node, :generation}, 1, {{node, :generation}, 0})
+    :ets.match_delete(@table, {{node, :_, :_}, :_, :_})
     :ok
   end
 
+  # A fetch that finishes after refresh/1 writes under the old generation, which is never read.
   defp cached(node, key, fetch) do
+    cache_key = {node, generation(node), key}
     now = System.monotonic_time(:millisecond)
     ttl_ms = ttl_ms()
 
-    case :ets.lookup(@table, {node, key}) do
+    case :ets.lookup(@table, cache_key) do
       [{_key, value, fetched_at}] when now - fetched_at < ttl_ms ->
         {:ok, value}
 
       _miss ->
         with {:ok, value} <- fetch.() do
-          :ets.insert(@table, {{node, key}, value, now})
+          :ets.insert(@table, {cache_key, value, now})
           {:ok, value}
         end
+    end
+  end
+
+  defp generation(node) do
+    case :ets.lookup(@table, {node, :generation}) do
+      [{_key, generation}] -> generation
+      [] -> 0
     end
   end
 

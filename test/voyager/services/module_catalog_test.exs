@@ -66,6 +66,18 @@ defmodule Voyager.Services.ModuleCatalogTest do
       assert {:ok, _} = ModuleCatalog.modules(node)
     end
 
+    test "drops a fetch that finishes after refresh/1", %{node: node} do
+      expect(Voyager.ErpcMock, :call, fn _, _, :trace_modules, [], _ ->
+        ModuleCatalog.refresh(node)
+        [{:stale, :ok}]
+      end)
+
+      expect_modules()
+
+      assert {:ok, [%{module: :stale}]} = ModuleCatalog.modules(node)
+      assert {:ok, [_, _, _, _]} = ModuleCatalog.modules(node)
+    end
+
     test "refetches once the TTL has passed", %{node: node} do
       Application.put_env(:voyager, :module_catalog_ttl_ms, 0)
       on_exit(fn -> Application.delete_env(:voyager, :module_catalog_ttl_ms) end)
