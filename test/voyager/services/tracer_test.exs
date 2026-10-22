@@ -115,6 +115,12 @@ defmodule Voyager.Services.TracerTest do
     refute_receive {:session_log, _session, _entries}
   end
 
+  test "resolves the pids again on start" do
+    assert {:ok, _session} = configure()
+    :sys.replace_state(Tracer, &put_in(&1.session.node, :other@nohost))
+    assert {:error, :noconnection} = Tracer.start(:ui)
+  end
+
   test "refuses to start without a config" do
     assert {:error, :not_configured} = Tracer.start(:ui)
   end

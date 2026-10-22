@@ -51,18 +51,39 @@ defmodule Voyager.Services.Tracer do
           {:ok, Session.t()} | {:error, :no_session | :busy | Ecto.Changeset.t() | term()}
   def configure(node, attrs, origin) when origin in [:ui, :mcp] do
     with {:ok, config} <- attrs |> Config.changeset() |> Ecto.Changeset.apply_action(:validate),
-         {:ok, pids} <- resolve_pids(node, config) do
-      GenServer.call(
-        __MODULE__,
-        {:configure, node, config, Config.to_agent(config, pids), origin}
-      )
+         {:ok, _pids} <- resolve_pids(node, config) do
+      GenServer.call(__MODULE__, {:configure, node, config, origin})
     end
   end
 
-  @doc "Starts or resumes the configured session; the agent's refusals come back as `{:error, reason}`."
+  @doc """
+  Starts or resumes the configured session, resolving its pids on the node again in the caller.
+  The agent's refusals come back as `{:error, reason}`, and `{:error, :changed}` means the
+  session was reconfigured meanwhile.
+  """
   @spec start(origin()) :: {:ok, Session.t()} | {:error, term()}
-  def start(origin) when origin in [:ui, :mcp],
-    do: GenServer.call(__MODULE__, {:start, origin}, @call_timeout)
+  def start(origin) when origin in [:ui, :mcp] do
+    case GenServer.call(__MODULE__, :session) do
+      nil ->
+        {:error, :no_session}
+
+      %Session{config: nil} ->
+        {:error, :not_configured}
+
+      %Session{status: :running} ->
+        {:error, :busy}
+
+      %Session{node: node, config: config} ->
+        case resolve_pids(node, config) do
+          {:ok, pids} ->
+            args = Config.to_agent(config, pids)
+            GenServer.call(__MODULE__, {:start, origin, node, config, args}, @call_timeout)
+
+          {:error, reason} ->
+            start_failed(reason, origin)
+        end
+    end
+  end
 
   @doc """
   Asks the remote tracer to stop; a `:stopped` entry with reason `:stopped` follows.
@@ -99,7 +120,7 @@ defmodule Voyager.Services.Tracer do
 
   @impl true
   def init(nil),
-    do: {:ok, Map.merge(%{session: nil, agent_args: nil, run: nil}, @empty_log)}
+    do: {:ok, Map.merge(%{session: nil, run: nil}, @empty_log)}
 
   @impl true
   def handle_call(request, _from, %{session: %Session{status: :running}} = state)
@@ -116,34 +137,33 @@ defmodule Voyager.Services.Tracer do
     }
 
     broadcast({:session_created, session})
-    {:reply, {:ok, session}, Map.merge(%{state | session: session, agent_args: nil}, @empty_log)}
+    {:reply, {:ok, session}, Map.merge(%{state | session: session}, @empty_log)}
   end
 
   def handle_call(:close, _from, %{session: nil} = state), do: {:reply, :ok, state}
 
   def handle_call(:close, _from, %{session: session} = state) do
     broadcast({:session_closed, session.id})
-    {:reply, :ok, Map.merge(%{state | session: nil, agent_args: nil}, @empty_log)}
+    {:reply, :ok, Map.merge(%{state | session: nil}, @empty_log)}
   end
 
   def handle_call(request, _from, %{session: nil} = state)
       when elem(request, 0) in [:configure, :start],
       do: {:reply, {:error, :no_session}, state}
 
-  def handle_call({:configure, node, config, agent_args, origin}, _from, state) do
+  def handle_call({:configure, node, config, origin}, _from, state) do
     state =
-      %{state | session: %{state.session | node: node, config: config}, agent_args: agent_args}
+      %{state | session: %{state.session | node: node, config: config}}
       |> append([control(:configured, origin, node: node, config: config)])
 
     {:reply, {:ok, state.session}, state}
   end
 
-  def handle_call({:start, _origin}, _from, %{session: %Session{config: nil}} = state),
-    do: {:reply, {:error, :not_configured}, state}
-
-  def handle_call({:start, origin}, _from, %{session: session} = state) do
-    {spec, limits} = state.agent_args
-
+  def handle_call(
+        {:start, origin, node, config, {spec, limits}},
+        _from,
+        %{session: %Session{node: node, config: config} = session} = state
+      ) do
     case Agent.call(session.node, :trace_start, [self(), spec, limits], Agent.default_timeout()) do
       {:ok, {:ok, tracer}} ->
         Process.monitor(tracer)
@@ -177,12 +197,15 @@ defmodule Voyager.Services.Tracer do
         {:reply, {:ok, state.session}, state}
 
       {:ok, {:error, reason}} ->
-        start_failed(reason, origin, state)
+        {:reply, start_failed(reason, origin), state}
 
       {:error, reason} ->
-        start_failed(reason, origin, state)
+        {:reply, start_failed(reason, origin), state}
     end
   end
+
+  def handle_call({:start, _origin, _node, _config, _args}, _from, state),
+    do: {:reply, {:error, :changed}, state}
 
   # The session ends on the tracer's done message or its DOWN, never on this reply.
   def handle_call({:stop, origin}, _from, %{session: %{status: :running} = session} = state) do
@@ -191,6 +214,8 @@ defmodule Voyager.Services.Tracer do
   end
 
   def handle_call({:stop, _origin}, _from, state), do: {:reply, :ok, state}
+
+  def handle_call(:session, _from, state), do: {:reply, state.session, state}
 
   def handle_call(:active, _from, state),
     do: {:reply, {state.session, Enum.sort_by(state.log ++ state.events, & &1.seq, :desc)}, state}
@@ -287,12 +312,12 @@ defmodule Voyager.Services.Tracer do
     )
   end
 
-  defp start_failed(reason, origin, state) do
+  defp start_failed(reason, origin) do
     Voyager.Telemetry.dispatch!("voyager.trace.start_failed",
       metadata: %{origin: origin, reason: reason}
     )
 
-    {:reply, {:error, reason}, state}
+    {:error, reason}
   end
 
   defp control(kind, origin, fields \\ []),
