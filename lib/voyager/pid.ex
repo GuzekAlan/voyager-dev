@@ -25,6 +25,8 @@ defmodule Voyager.Pid do
   process only on the node that prints it, so it is resolved there.
   """
   @spec resolve(node(), String.t()) :: {:ok, pid()} | {:error, term()}
+  def resolve(node, "#PID" <> pid_string), do: resolve(node, pid_string)
+
   def resolve(node, "<0." <> _rest = pid_string) do
     Erpc.safe_call(node, :erlang, :list_to_pid, [String.to_charlist(pid_string)])
   end

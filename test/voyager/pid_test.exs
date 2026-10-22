@@ -192,6 +192,20 @@ defmodule Voyager.PidTest do
       assert Pid.resolve(:demo@localhost, "<0.45.6>") == {:ok, pid}
     end
 
+    test "resolves a #PID<0.X.Y> string on the remote node itself" do
+      pid = self()
+
+      expect(Voyager.ErpcMock, :call, fn :demo@localhost,
+                                         :erlang,
+                                         :list_to_pid,
+                                         [~c"<0.45.6>"],
+                                         _timeout ->
+        pid
+      end)
+
+      assert Pid.resolve(:demo@localhost, "#PID<0.45.6>") == {:ok, pid}
+    end
+
     test "surfaces an unreachable node without raising" do
       expect(Voyager.ErpcMock, :call, fn _node, _mod, _fun, _args, _timeout ->
         :erlang.error({:erpc, :noconnection})
