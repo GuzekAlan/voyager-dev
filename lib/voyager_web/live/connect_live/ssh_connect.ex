@@ -321,13 +321,23 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     end
   end
 
-  def handle_event("submit_passphrase", %{"passphrase" => %{"passphrase" => passphrase}}, socket) do
-    p = Ecto.Changeset.apply_changes(socket.assigns.ssh_form.source)
+  def handle_event(
+        "submit_passphrase",
+        %{"passphrase" => %{"passphrase" => passphrase}},
+        %{assigns: %{passphrase_form: %Phoenix.HTML.Form{}}} = socket
+      ) do
+    case Ecto.Changeset.apply_action(socket.assigns.ssh_form.source, :insert) do
+      {:ok, %SshConnectionParams{} = p} ->
+        socket
+        |> KeyAuth.connect(%{p | passphrase: passphrase}, &start_connect/2)
+        |> noreply()
 
-    socket
-    |> KeyAuth.connect(%{p | passphrase: passphrase}, &start_connect/2)
-    |> noreply()
+      {:error, _changeset} ->
+        {:noreply, assign(socket, :passphrase_form, nil)}
+    end
   end
+
+  def handle_event("submit_passphrase", _params, socket), do: {:noreply, socket}
 
   def handle_event("fill_ssh_recent", _params, %{assigns: %{disabled?: true}} = socket) do
     {:noreply, socket}
