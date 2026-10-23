@@ -2,7 +2,7 @@ name: Bump Elixir and OTP
 
 on:
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: "0 6 1,15 * *"
   workflow_dispatch:
 
 permissions:
@@ -30,4 +30,6 @@ jobs:
       - name: Open PR and run CI
         env:
           TITLE: "Chore: Bump Elixir to ${{ steps.versions.outputs.elixir }} and OTP to ${{ steps.versions.outputs.otp }}"
+          ELIXIR_RELEASES: ${{ steps.versions.outputs.elixir_releases }}
+          OTP_RELEASES: ${{ steps.versions.outputs.otp_releases }}
         run: bash .github/scripts/open_bump_pr.sh
