@@ -250,7 +250,7 @@ defmodule VoyagerWeb.ConnectLive.DirectConnect do
     |> to_form(as: :conn)
   end
 
-  defp prefill_form(%{"connection" => id}) do
+  defp prefill_form(%{"connection" => id}) when is_binary(id) do
     with {int_id, ""} <- Integer.parse(id),
          %Connection{} = conn <- ConnectionQueries.get(int_id) do
       saved_form(conn)
