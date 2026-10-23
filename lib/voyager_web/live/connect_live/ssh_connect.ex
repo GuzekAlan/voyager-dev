@@ -381,7 +381,7 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
     |> to_form(as: :ssh)
   end
 
-  defp prefill_form(%{"connection" => id}) do
+  defp prefill_form(%{"connection" => id}) when is_binary(id) do
     with {int_id, ""} <- Integer.parse(id),
          %SshConnection{} = conn <- SshConnectionQueries.get(int_id) do
       saved_ssh_form(conn)
