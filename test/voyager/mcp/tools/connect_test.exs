@@ -91,7 +91,7 @@ defmodule Voyager.MCP.Tools.ConnectTest do
 
       assert %{"status" => "connected"} = args |> execute() |> run()
       args |> Map.put("ssh_port", 2222) |> execute() |> assert_error()
-      args |> Map.put("epmd_port", 14369) |> execute() |> assert_error()
+      args |> Map.put("epmd_port", 14_369) |> execute() |> assert_error()
     end
   end
 
