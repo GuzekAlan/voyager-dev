@@ -13,11 +13,19 @@ defmodule Voyager.Services.Tracer do
   newest trace and dropped entries are kept in memory. Broadcasts on `topic/0` are
   `{:session_created, session}`, `{:session_closed, id}` and
   `{:session_entries, session, entries}` with the entries just appended, oldest first.
+
+  A session created with `save: true` gets a `Voyager.Schemas.TraceSession` row and
+  writes every entry as it is appended; `load/1` makes it active again later.
   """
 
   use GenServer
 
+  alias Voyager.Actions.TraceEntries, as: TraceEntryActions
+  alias Voyager.Actions.TraceSessions, as: TraceSessionActions
   alias Voyager.Agent
+  alias Voyager.Queries.TraceEntries, as: TraceEntryQueries
+  alias Voyager.Queries.TraceSessions, as: TraceSessionQueries
+  alias Voyager.Repo
   alias Voyager.Services.Tracer.Config
   alias Voyager.Services.Tracer.Run
   alias Voyager.Services.Tracer.Session
@@ -69,6 +77,18 @@ defmodule Voyager.Services.Tracer do
   @spec create(origin(), save: boolean()) :: {:ok, Session.t()} | {:error, :busy}
   def create(origin, opts \\ []) when origin in [:ui, :mcp],
     do: GenServer.call(__MODULE__, {:create, origin, Keyword.get(opts, :save, false)})
+
+  @doc """
+  Makes saved session `id` active, with its config, counts and newest entries.
+  Returns `{:error, :busy}` while the active session runs.
+  """
+  @spec load(pos_integer()) :: {:ok, Session.t()} | {:error, :busy | :not_found}
+  def load(id) when is_integer(id), do: GenServer.call(__MODULE__, {:load, id})
+
+  @doc "Deletes saved session `id` and its entries, unloading it if active; the running one is refused."
+  @spec delete(pos_integer()) ::
+          {:ok, Voyager.Schemas.TraceSession.t()} | {:error, :busy | :not_found}
+  def delete(id) when is_integer(id), do: GenServer.call(__MODULE__, {:delete, id})
 
   @doc "Closes the active session. Returns `{:error, :busy}` while it runs."
   @spec close() :: :ok | {:error, :busy}
@@ -138,7 +158,8 @@ defmodule Voyager.Services.Tracer do
   A page of up to `:limit` (default 100, at least 1) entries of session `id` with `seq` in
   `[:since, :before)` (integers >= 0). `:order` is `:desc` (default) for the newest entries of the
   range first or `:asc` for the oldest first. `truncated?` says entries in the range the page
-  covers were evicted from memory. Raises `ArgumentError` on an unknown option or a bad value.
+  covers were evicted from memory; saved sessions are read from the database and never are.
+  Raises `ArgumentError` on an unknown option or a bad value.
   """
   @spec entries(pos_integer(),
           since: non_neg_integer(),
@@ -151,29 +172,56 @@ defmodule Voyager.Services.Tracer do
     opts = Keyword.validate!(opts, [:since, :before, order: :desc, limit: 100])
     Enum.each(opts, fn {key, value} -> validate_entries_opt!(key, value) end)
 
-    GenServer.call(__MODULE__, {:entries, id, opts})
+    case GenServer.call(__MODULE__, {:entries, id, opts}) do
+      :saved -> saved_entries(id, opts)
+      reply -> reply
+    end
   end
 
   @impl true
-  def init(nil), do: {:ok, %__MODULE__{}}
+  def init(nil) do
+    TraceSessionActions.interrupt_running()
+    {:ok, %__MODULE__{}}
+  end
 
   @impl true
   def handle_call(request, _from, %{session: %Session{status: :running}} = state)
       when request == :close or
-             (is_tuple(request) and elem(request, 0) in [:create, :configure, :start]),
+             (is_tuple(request) and elem(request, 0) in [:create, :load, :configure, :start]),
       do: {:reply, {:error, :busy}, state}
 
   def handle_call({:create, origin, save}, _from, _state) do
-    session = %Session{
-      id: System.unique_integer([:positive]),
-      origin: origin,
-      save: save,
-      created_at: DateTime.utc_now()
-    }
+    id =
+      if save do
+        {:ok, row} = TraceSessionActions.create(%{origin: origin, status: :idle})
+        row.id
+      else
+        -System.unique_integer([:positive])
+      end
+
+    session = %Session{id: id, origin: origin, save: save, created_at: DateTime.utc_now()}
 
     broadcast({:session_created, session})
     {:reply, {:ok, session}, %__MODULE__{session: session}}
   end
+
+  def handle_call({:load, id}, _from, state) do
+    case TraceSessionQueries.get(id) do
+      nil -> {:reply, {:error, :not_found}, state}
+      row -> loaded(row)
+    end
+  end
+
+  def handle_call({:delete, id}, _from, %{session: %{id: id, status: :running}} = state),
+    do: {:reply, {:error, :busy}, state}
+
+  def handle_call({:delete, id}, _from, %{session: %{id: id}}) do
+    broadcast({:session_closed, id})
+    {:reply, TraceSessionActions.delete(id), %__MODULE__{}}
+  end
+
+  def handle_call({:delete, id}, _from, state),
+    do: {:reply, TraceSessionActions.delete(id), state}
 
   def handle_call(:close, _from, %{session: nil} = state), do: {:reply, :ok, state}
 
@@ -252,7 +300,11 @@ defmodule Voyager.Services.Tracer do
 
   def handle_call(:active, _from, state), do: {:reply, state.session, state}
 
-  def handle_call({:entries, id, opts}, _from, %{session: %{id: id} = session} = state) do
+  def handle_call(
+        {:entries, id, opts},
+        _from,
+        %{session: %{id: id, save: false} = session} = state
+      ) do
     since = Keyword.get(opts, :since, 0)
     before = min(Keyword.get(opts, :before, session.seq), session.seq)
     order = opts[:order]
@@ -275,8 +327,7 @@ defmodule Voyager.Services.Tracer do
     {:reply, {:ok, %{entries: page, truncated?: length(page) < Range.size(covered)}}, state}
   end
 
-  def handle_call({:entries, _id, _opts}, _from, state),
-    do: {:reply, {:error, :not_found}, state}
+  def handle_call({:entries, _id, _opts}, _from, state), do: {:reply, :saved, state}
 
   @impl true
   def handle_cast(:disconnecting, %{session: %{status: :running}} = state),
@@ -383,6 +434,44 @@ defmodule Voyager.Services.Tracer do
     end
   end
 
+  defp loaded(row) do
+    controls = TraceEntryQueries.controls(row.id)
+    configured = Enum.find(controls, &(&1.kind == :configured)) || %{node: nil, config: nil}
+
+    session = %Session{
+      id: row.id,
+      origin: row.origin,
+      save: true,
+      created_at: DateTime.from_naive!(row.inserted_at, "Etc/UTC"),
+      node: configured.node,
+      config: configured.config,
+      status: row.status,
+      stop_reason: row.stop_reason,
+      traces: row.traces,
+      dropped: row.dropped,
+      bytes: row.bytes,
+      seq: TraceEntryQueries.next_seq(row.id),
+      started_at: row.started_at,
+      stopped_at: row.stopped_at
+    }
+
+    broadcast({:session_created, session})
+
+    state = %__MODULE__{
+      session: session,
+      controls: controls,
+      traces: TraceEntryQueries.traces(row.id, @kept_traces)
+    }
+
+    {:reply, {:ok, session}, state}
+  end
+
+  defp saved_entries(id, opts) do
+    if TraceSessionQueries.get(id),
+      do: {:ok, %{entries: TraceEntryQueries.page(id, opts), truncated?: false}},
+      else: {:error, :not_found}
+  end
+
   defp start_failed(reason, origin) do
     Voyager.Telemetry.dispatch!("voyager.trace.start_failed",
       metadata: %{origin: origin, reason: reason}
@@ -417,6 +506,7 @@ defmodule Voyager.Services.Tracer do
     {traces, controls} =
       Enum.split_with(entries, &(&1.kind in [:trace, :dropped]))
 
+    session = save(session, entries)
     broadcast({:session_entries, session, entries})
 
     kept = Enum.take(Enum.reverse(traces) ++ state.traces, @kept_traces)
@@ -428,6 +518,23 @@ defmodule Voyager.Services.Tracer do
         traces: kept
     }
   end
+
+  defp save(%Session{save: true} = session, entries) do
+    {:ok, session} =
+      Repo.transact(fn ->
+        session = %{
+          session
+          | bytes: session.bytes + TraceEntryActions.insert_all(session.id, entries)
+        }
+
+        TraceSessionActions.sync(session)
+        {:ok, session}
+      end)
+
+    session
+  end
+
+  defp save(session, _entries), do: session
 
   defp resolve_pids(_node, %Config{processes: processes}) when processes != :pids, do: {:ok, []}
 

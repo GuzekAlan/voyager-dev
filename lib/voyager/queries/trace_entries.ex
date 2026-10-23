@@ -13,8 +13,7 @@ defmodule Voyager.Queries.TraceEntries do
   alias Voyager.Services.Tracer.Config
 
   @doc """
-  Up to `:limit` entries with `seq` in `[:since, :before)`: oldest first from
-  `:since` when it is given, otherwise the newest before `:before`, newest first.
+  Up to `:limit` entries with `seq` in `[:since, :before)`, `:order` (default `:desc`) by `seq`.
   """
   @spec page(integer(), keyword()) :: [map()]
   def page(session_id, opts) do
@@ -64,7 +63,7 @@ defmodule Voyager.Queries.TraceEntries do
     |> Enum.take(Keyword.fetch!(opts, :limit))
   end
 
-  defp order(opts), do: if(Keyword.has_key?(opts, :since), do: :asc, else: :desc)
+  defp order(opts), do: Keyword.get(opts, :order, :desc)
 
   defp where_before(query, nil), do: query
   defp where_before(query, before), do: where(query, [e], e.seq < ^before)

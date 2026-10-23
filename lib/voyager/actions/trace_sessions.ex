@@ -6,9 +6,33 @@ defmodule Voyager.Actions.TraceSessions do
   alias Voyager.Queries.TraceSessions, as: TraceSessionQueries
   alias Voyager.Repo
   alias Voyager.Schemas.TraceSession
+  alias Voyager.Services.Tracer.Session
 
   @spec create(map()) :: {:ok, TraceSession.t()} | {:error, Ecto.Changeset.t()}
   def create(attrs), do: %TraceSession{} |> TraceSession.changeset(attrs) |> Repo.insert()
+
+  @doc "Writes the Tracer session's state to its row."
+  @spec sync(Session.t()) :: :ok
+  def sync(%Session{} = session) do
+    TraceSession
+    |> where(id: ^session.id)
+    |> Repo.update_all(
+      set: [
+        status: session.status,
+        node: session.node && Atom.to_string(session.node),
+        config: session.config && Map.from_struct(session.config),
+        stop_reason: stop_reason_text(session.stop_reason),
+        traces: session.traces,
+        dropped: session.dropped,
+        bytes: session.bytes,
+        started_at: session.started_at,
+        stopped_at: session.stopped_at,
+        updated_at: NaiveDateTime.utc_now(:second)
+      ]
+    )
+
+    :ok
+  end
 
   @doc "Deletes the session and its entries."
   @spec delete(integer()) :: {:ok, TraceSession.t()} | {:error, :not_found}
@@ -35,6 +59,7 @@ defmodule Voyager.Actions.TraceSessions do
   @doc "How a `Voyager.Services.Tracer.stop_reason()` is stored."
   @spec stop_reason_text(term()) :: String.t() | nil
   def stop_reason_text(nil), do: nil
+  def stop_reason_text(reason) when is_binary(reason), do: reason
   def stop_reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
   def stop_reason_text(reason), do: inspect(reason)
 end

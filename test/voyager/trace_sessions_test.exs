@@ -48,7 +48,7 @@ defmodule Voyager.TraceSessionsTest do
     TraceEntryActions.insert_all(id, entries)
 
     assert [configured, started, dropped, stopped] =
-             TraceEntryQueries.page(id, since: 0, limit: 10)
+             TraceEntryQueries.page(id, since: 0, order: :asc, limit: 10)
 
     assert configured == hd(entries)
     assert started == Enum.at(entries, 1)
@@ -64,8 +64,8 @@ defmodule Voyager.TraceSessionsTest do
     %{id: id} = session!(:stopped)
     TraceEntryActions.insert_all(id, Enum.map(0..4, &trace(&1, %{})))
 
-    assert [1, 2] == seqs(TraceEntryQueries.page(id, since: 1, limit: 2))
-    assert [2, 3] == seqs(TraceEntryQueries.page(id, since: 2, before: 4, limit: 10))
+    assert [1, 2] == seqs(TraceEntryQueries.page(id, since: 1, order: :asc, limit: 2))
+    assert [2, 3] == seqs(TraceEntryQueries.page(id, since: 2, order: :asc, before: 4, limit: 10))
     assert [4, 3] == seqs(TraceEntryQueries.page(id, limit: 2))
     assert [2, 1] == seqs(TraceEntryQueries.page(id, before: 3, limit: 2))
     assert TraceEntryQueries.next_seq(session!(:idle).id) == 0
@@ -83,7 +83,7 @@ defmodule Voyager.TraceSessionsTest do
       %{seq: 5, kind: :stopped, at: 3, origin: :ui, reason: :stopped, traces: 3, dropped: 1}
     ])
 
-    assert [0, 1, 2, 3] == seqs(TraceEntryQueries.page(id, since: 0, limit: 4))
+    assert [0, 1, 2, 3] == seqs(TraceEntryQueries.page(id, since: 0, order: :asc, limit: 4))
     assert [4, 3, 2] == seqs(TraceEntryQueries.page(id, before: 5, limit: 3))
     assert [4, 3] == seqs(TraceEntryQueries.traces(id, 2))
     assert [5, 0] == seqs(TraceEntryQueries.controls(id))
@@ -105,7 +105,7 @@ defmodule Voyager.TraceSessionsTest do
 
     pid_string = Voyager.Pid.format(pid, :local)
 
-    assert [call, return] = TraceEntryQueries.page(id, since: 0, limit: 10)
+    assert [call, return] = TraceEntryQueries.page(id, since: 0, order: :asc, limit: 10)
 
     assert %{kind: :trace, type: :call, mfa: "Date.leap_year?/1", process: ":my_server"} = call
     assert %{pid: ^pid_string, truncated: true} = call
