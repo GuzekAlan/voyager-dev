@@ -12,12 +12,18 @@ otp_versions=$(curl -fsS "$hex/otp/ubuntu-24.04/builds.txt" | awk '{print $1}' |
 elixir_versions=$(curl -fsS "$hex/elixir/builds.txt" | awk '{print $1}' |
   sed -nE "s/^v([0-9]+\.[0-9]+\.[0-9]+)-otp-$major$/\1/p" | sort -V)
 
-otp=$(tail -1 <<< "$otp_versions")
-elixir=$(tail -1 <<< "$elixir_versions")-otp-$major
-
 newer_than() {
   awk -v current="$1" 'found; $0 == current {found = 1}' | paste -sd ' ' -
 }
+
+otp_releases=$(newer_than "$current_otp" <<< "$otp_versions")
+elixir_releases=$(newer_than "${current_elixir%%-*}" <<< "$elixir_versions")
+
+otp=${otp_releases##* }
+otp=${otp:-$current_otp}
+elixir=${elixir_releases##* }
+elixir=${elixir:+$elixir-otp-$major}
+elixir=${elixir:-$current_elixir}
 
 sed -E -e "s/^erlang .*/erlang $otp/" -e "s/^elixir .*/elixir $elixir/" .tool-versions > .tool-versions.tmp
 mv .tool-versions.tmp .tool-versions
@@ -25,6 +31,6 @@ mv .tool-versions.tmp .tool-versions
 {
   echo "otp=$otp"
   echo "elixir=$elixir"
-  echo "otp_releases=$(newer_than "$current_otp" <<< "$otp_versions")"
-  echo "elixir_releases=$(newer_than "${current_elixir%%-*}" <<< "$elixir_versions")"
+  echo "otp_releases=$otp_releases"
+  echo "elixir_releases=$elixir_releases"
 } >> "${GITHUB_OUTPUT:-/dev/stdout}"

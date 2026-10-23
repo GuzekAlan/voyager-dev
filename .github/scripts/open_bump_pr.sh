@@ -39,9 +39,9 @@ git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 git switch -c "$BRANCH"
 git commit -am "$TITLE"
 git push --force origin "$BRANCH"
-gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$(changelog)"
 
-# PRs opened with GITHUB_TOKEN do not trigger pull_request workflows.
+# PRs opened with GITHUB_TOKEN do not trigger pull_request workflows. Dispatch before creating the PR so a rerun retries it.
 for workflow in ci-check.yaml playwright.yml build-apps.yml; do
   gh workflow run "$workflow" --ref "$BRANCH"
 done
+gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$(changelog)"
