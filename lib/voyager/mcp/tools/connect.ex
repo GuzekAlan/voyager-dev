@@ -59,8 +59,10 @@ defmodule Voyager.MCP.Tools.Connect do
   @impl true
   def execute(params, frame) do
     response =
-      case target(params) do
-        {:ok, target} -> connect(target, NodeSession.current())
+      with {:ok, target} <- target(params),
+           :ok <- check_route(target) do
+        connect(target, NodeSession.current())
+      else
         {:error, message} -> Response.error(Response.tool(), message)
       end
 
@@ -84,9 +86,7 @@ defmodule Voyager.MCP.Tools.Connect do
         {:ok, direct_target(node_name, params)}
 
       {user, host} when is_binary(user) and is_binary(host) ->
-        if ProxyEpmd.active?(),
-          do: {:ok, ssh_target(node_name, user, host, params)},
-          else: {:error, "SSH tunnels need Voyager started with its proxy epmd module"}
+        {:ok, ssh_target(node_name, user, host, params)}
 
       _ ->
         {:error, "Pass both `ssh_user` and `ssh_host` to tunnel through SSH"}
@@ -94,6 +94,14 @@ defmodule Voyager.MCP.Tools.Connect do
   end
 
   defp target(_params), do: {:error, "Pass `connection_id` or `node_name`"}
+
+  defp check_route(%SshConnection{}) do
+    if ProxyEpmd.active?(),
+      do: :ok,
+      else: {:error, "SSH tunnels need Voyager started with its proxy epmd module"}
+  end
+
+  defp check_route(%Connection{}), do: :ok
 
   defp saved("direct:" <> id), do: get(id, &ConnectionQueries.get/1)
   defp saved("ssh:" <> id), do: get(id, &SshConnectionQueries.get/1)

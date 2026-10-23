@@ -39,6 +39,15 @@ defmodule Voyager.MCP.Tools.ConnectTest do
       |> assert_error()
     end
 
+    test "refuses a saved SSH connection without the proxy epmd module" do
+      conn = insert!(%SshConnection{ssh_user: "u", ssh_host: "gw", node_name: "app@10.0.0.5"})
+      Process.register(self(), ElixirKit.PubSub)
+
+      %{"connection_id" => "ssh:#{conn.id}"} |> execute() |> assert_error()
+
+      refute_received {:"$gen_cast", {:broadcast, "messages", _}}
+    end
+
     test "has no secret fields" do
       assert {:ok, params} =
                Connect.mcp_schema(%{"node_name" => "app@host", "cookie" => "secret"})
