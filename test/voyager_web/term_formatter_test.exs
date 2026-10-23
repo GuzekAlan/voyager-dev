@@ -80,9 +80,14 @@ defmodule VoyagerWeb.TermFormatterTest do
       assert erlang("abc" <> <<255>>, printable_limit: 2) == ~S|<<"ab",...>>|
     end
 
-    test "prints Unicode text whatever the VM's printable range" do
+    test "prints a list as a string only within Latin-1, as a default erl shell does" do
+      assert erlang(~c"café") == ~S|"café"|
+      assert erlang([200, 404, 500]) == "[200, 404, 500]"
+      assert erlang(~c"zażółć") == "[122, 97, 380, 243, 322, 263]"
+    end
+
+    test "prints a UTF-8 binary as text" do
       assert erlang("zażółć") == ~S|<<"zażółć"/utf8>>|
-      assert erlang(~c"zażółć") == ~S|"zażółć"|
       assert erlang(<<"ab", 255>>) == "<<97,98,255>>"
     end
 

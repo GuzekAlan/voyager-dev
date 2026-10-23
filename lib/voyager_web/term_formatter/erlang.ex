@@ -1,7 +1,8 @@
 defmodule VoyagerWeb.TermFormatter.Erlang do
   @moduledoc """
   Prints terms in Erlang syntax with `erl_pp`, from an abstract form built
-  here, so the output never depends on the VM's `+pc` flag.
+  here, so the output never depends on the VM's `+pc` flag. A list reads as a
+  string only within Latin-1, as in a default `erl` shell; a binary within Unicode.
   """
 
   alias Voyager.Pid
@@ -159,7 +160,7 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
     {chars, rest} = take_chars(text, limit, [])
 
     cond do
-      not :io_lib.printable_unicode_list(chars) -> :error
+      not printable?(text, chars) -> :error
       text_end?(text, rest) -> {:ok, chars, false}
       is_integer(limit) and length(chars) == limit -> {:ok, chars, true}
       true -> :error
@@ -168,6 +169,11 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
 
   defp text_end?(list, rest) when is_list(list), do: rest == []
   defp text_end?(_bitstring, rest), do: rest == ""
+
+  # Lists follow observer under the default `+pc latin1`, so [200, 404, 500] stays numbers;
+  # binaries follow `+pc unicode`, so UTF-8 text is not shown as bytes.
+  defp printable?(list, chars) when is_list(list), do: :io_lib.printable_latin1_list(chars)
+  defp printable?(_bitstring, chars), do: :io_lib.printable_unicode_list(chars)
 
   defp take_chars(list, limit, acc) when is_list(list), do: take_list_chars(list, limit, acc)
   defp take_chars(bitstring, limit, acc), do: take_binary_chars(bitstring, limit, acc)
