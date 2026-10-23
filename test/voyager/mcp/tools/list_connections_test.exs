@@ -79,7 +79,8 @@ defmodule Voyager.MCP.Tools.ListConnectionsTest do
     insert!(%SshConnection{ssh_user: "deploy", ssh_host: "b", node_name: "app@127.0.0.1"}, 1)
 
     session = Fakes.node_session(node_name: "app@127.0.0.1", connector: SshConnector)
-    Fakes.put_session(%{session | meta: %{ssh_user: "deploy", ssh_host: "a"}})
+    meta = %{ssh_user: "deploy", ssh_host: "a", ssh_port: 22, epmd_port: 4369}
+    Fakes.put_session(%{session | meta: meta})
 
     assert [%{"connected" => true, "ssh" => %{"host" => "a"}}, %{"connected" => false}] =
              run()["connections"]

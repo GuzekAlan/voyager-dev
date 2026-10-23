@@ -13,6 +13,8 @@ defmodule Voyager.MCP.Tools.ConnectTest do
   alias Voyager.Schemas.Connection
   alias Voyager.Schemas.SshConnection
 
+  @ssh_meta %{ssh_user: "deploy", ssh_host: "gw", ssh_port: 22, epmd_port: 4369}
+
   setup do
     previous_state = :sys.get_state(NodeSession)
     Fakes.put_session(nil)
@@ -74,11 +76,22 @@ defmodule Voyager.MCP.Tools.ConnectTest do
     test "treats the same node name behind another SSH host as another node" do
       enable_proxy_epmd(%{})
       session = Fakes.node_session(node_name: "app@127.0.0.1", connector: SshConnector)
-      Fakes.connect_node!(%{session | meta: %{ssh_user: "deploy", ssh_host: "a"}})
+      Fakes.connect_node!(%{session | meta: %{@ssh_meta | ssh_host: "a"}})
 
       %{"node_name" => "app@127.0.0.1", "ssh_user" => "deploy", "ssh_host" => "b"}
       |> execute()
       |> assert_error()
+    end
+
+    test "treats the same SSH host on another port as another node" do
+      enable_proxy_epmd(%{})
+      session = Fakes.node_session(node_name: "app@127.0.0.1", connector: SshConnector)
+      Fakes.connect_node!(%{session | meta: @ssh_meta})
+      args = %{"node_name" => "app@127.0.0.1", "ssh_user" => "deploy", "ssh_host" => "gw"}
+
+      assert %{"status" => "connected"} = args |> execute() |> run()
+      args |> Map.put("ssh_port", 2222) |> execute() |> assert_error()
+      args |> Map.put("epmd_port", 14369) |> execute() |> assert_error()
     end
   end
 

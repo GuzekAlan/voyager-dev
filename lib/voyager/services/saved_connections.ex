@@ -30,9 +30,10 @@ defmodule Voyager.Services.SavedConnections do
       do: true
 
   def connected?(
-        %SshConnection{node_name: name, ssh_user: user, ssh_host: host},
-        %Session{node_name: name, meta: %{ssh_user: user, ssh_host: host}}
-      ),
+        %SshConnection{node_name: name, ssh_user: user, ssh_host: host} = c,
+        %Session{node_name: name, meta: %{ssh_user: user, ssh_host: host} = meta}
+      )
+      when c.ssh_port == meta.ssh_port and c.epmd_port == meta.epmd_port,
       do: true
 
   def connected?(_saved, _session), do: false
