@@ -14,7 +14,8 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
   @spec inspect(term(), keyword()) :: String.t()
   def inspect(term, opts \\ []) do
     opts = Inspect.Opts.new(opts)
-    term |> abstract(opts) |> print(line_length(opts))
+    {form, _opts} = abstract(term, opts)
+    print(form, line_length(opts))
   end
 
   @doc """
@@ -24,7 +25,8 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
   @spec copy_string(term(), keyword()) :: String.t()
   def copy_string(term, opts \\ []) do
     opts = Inspect.Opts.new([pretty: true] ++ opts)
-    term |> abstract(:copy) |> print(line_length(opts))
+    {form, _mode} = abstract(term, :copy)
+    print(form, line_length(opts))
   end
 
   @spec format_mfa({module(), atom(), arity()}) :: String.t()
@@ -47,16 +49,46 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
   defp line_length(%Inspect.Opts{pretty: true, width: width}) when is_integer(width), do: width
   defp line_length(_opts), do: @single_line
 
-  defp abstract(id, :copy) when is_pid(id) or is_reference(id) or is_port(id) do
+  defp abstract(tuple, mode) when is_tuple(tuple) do
+    {forms, more?, mode} = tuple |> Tuple.to_list() |> abstract_each(mode, &abstract/2)
+    {{:tuple, anno(), forms ++ elision(more?)}, mode}
+  end
+
+  defp abstract(map, mode) when is_map(map) do
+    {fields, more?, mode} = map |> :maps.to_list() |> Enum.sort() |> abstract_each(mode, &field/2)
+    elided = for elision <- elision(more?), do: {:map_field_assoc, anno(), elision, elision}
+    {{:map, anno(), fields ++ elided}, mode}
+  end
+
+  defp abstract([_ | _] = list, mode) do
+    case printable_prefix(list, printable_limit(mode)) do
+      {:ok, chars, more?} -> {string(chars, more?), mode}
+      :error -> cons(list, mode)
+    end
+  end
+
+  defp abstract(bitstring, mode) when is_bitstring(bitstring) and bitstring != "" do
+    case printable_prefix(bitstring, printable_limit(mode)) do
+      {:ok, chars, more?} ->
+        {{:bin, anno(), [string_element(chars) | elision_element(more?)]}, mode}
+
+      :error ->
+        {bytes(bitstring, limit(mode)), spend(mode, byte_size(bitstring))}
+    end
+  end
+
+  defp abstract(term, mode), do: {leaf(term, mode), mode}
+
+  defp leaf(id, :copy) when is_pid(id) or is_reference(id) or is_port(id) do
     {fun, arg} = TermFormatter.identifier(id)
     call(fun, :erl_parse.abstract(arg))
   end
 
-  defp abstract(pid, _opts) when is_pid(pid), do: text(Pid.format(pid))
-  defp abstract(ref, _opts) when is_reference(ref), do: text(:erlang.ref_to_list(ref))
-  defp abstract(port, _opts) when is_port(port), do: text(:erlang.port_to_list(port))
+  defp leaf(pid, _mode) when is_pid(pid), do: text(Pid.format(pid))
+  defp leaf(ref, _mode) when is_reference(ref), do: text(:erlang.ref_to_list(ref))
+  defp leaf(port, _mode) when is_port(port), do: text(:erlang.port_to_list(port))
 
-  defp abstract(fun, mode) when is_function(fun) do
+  defp leaf(fun, mode) when is_function(fun) do
     case :erlang.fun_info(fun, :type) do
       {:type, :external} ->
         :erl_parse.abstract(fun)
@@ -69,52 +101,36 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
     end
   end
 
-  defp abstract(tuple, mode) when is_tuple(tuple) do
-    {items, more?} = tuple |> Tuple.to_list() |> cut(limit(mode))
-    {:tuple, anno(), Enum.map(items, &abstract(&1, mode)) ++ elision(more?)}
+  defp leaf(other, _mode), do: :erl_parse.abstract(other)
+
+  # :limit is one budget for the whole term, spent depth-first as Kernel.inspect/2 spends it.
+  defp abstract_each(items, mode, fun, acc \\ [])
+  defp abstract_each([], mode, _fun, acc), do: {Enum.reverse(acc), false, mode}
+
+  defp abstract_each(_items, %Inspect.Opts{limit: 0} = opts, _fun, acc),
+    do: {Enum.reverse(acc), true, opts}
+
+  defp abstract_each([item | items], mode, fun, acc) do
+    {form, mode} = fun.(item, spend(mode, 1))
+    abstract_each(items, mode, fun, [form | acc])
   end
 
-  defp abstract(map, mode) when is_map(map) do
-    {pairs, more?} = map |> :maps.to_list() |> Enum.sort() |> cut(limit(mode))
-
-    fields =
-      for {key, value} <- pairs do
-        {:map_field_assoc, anno(), abstract(key, mode), abstract(value, mode)}
-      end
-
-    elided = for elision <- elision(more?), do: {:map_field_assoc, anno(), elision, elision}
-    {:map, anno(), fields ++ elided}
+  defp field({key, value}, mode) do
+    {key, mode} = abstract(key, mode)
+    {value, mode} = abstract(value, mode)
+    {{:map_field_assoc, anno(), key, value}, mode}
   end
 
-  defp abstract([_ | _] = list, mode) do
-    case printable_prefix(list, printable_limit(mode)) do
-      {:ok, chars, more?} -> string(chars, more?)
-      :error -> cons(list, limit(mode), mode)
-    end
-  end
+  defp spend(%Inspect.Opts{limit: limit} = opts, count) when is_integer(limit),
+    do: %{opts | limit: max(limit - count, 0)}
 
-  defp abstract(bitstring, mode) when is_bitstring(bitstring) and bitstring != "" do
-    case printable_prefix(bitstring, printable_limit(mode)) do
-      {:ok, chars, more?} -> {:bin, anno(), [string_element(chars) | elision_element(more?)]}
-      :error -> bytes(bitstring, limit(mode))
-    end
-  end
+  defp spend(mode, _count), do: mode
 
-  defp abstract(other, _mode), do: :erl_parse.abstract(other)
-
-  # Each nested collection gets its own :limit; the agent's term budget bounds the total.
   defp limit(:copy), do: :infinity
   defp limit(%Inspect.Opts{limit: limit}), do: limit
 
   defp printable_limit(:copy), do: :infinity
   defp printable_limit(%Inspect.Opts{printable_limit: limit}), do: limit
-
-  defp cut(items, :infinity), do: {items, false}
-
-  defp cut(items, limit) do
-    {kept, rest} = Enum.split(items, limit)
-    {kept, rest != []}
-  end
 
   defp elision(true), do: [@elision]
   defp elision(false), do: []
@@ -126,17 +142,21 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
   defp string(chars, false), do: {:string, anno(), chars}
   defp string(chars, true), do: {:op, anno(), :++, {:string, anno(), chars}, @elision}
 
-  defp cons(_list, 0, _mode), do: {:cons, anno(), @elision, {nil, anno()}}
-  defp cons(list, limit, mode), do: cons_tail(list, limit, mode)
+  defp cons(_list, %Inspect.Opts{limit: 0} = opts),
+    do: {{:cons, anno(), @elision, {nil, anno()}}, opts}
 
-  defp cons_tail([], _limit, _mode), do: {nil, anno()}
-  defp cons_tail([_ | _], 0, _mode), do: @elision
+  defp cons(list, mode), do: cons_tail(list, mode)
 
-  defp cons_tail([head | tail], limit, mode) do
-    {:cons, anno(), abstract(head, mode), cons_tail(tail, decrement(limit), mode)}
+  defp cons_tail([], mode), do: {{nil, anno()}, mode}
+  defp cons_tail([_ | _], %Inspect.Opts{limit: 0} = opts), do: {@elision, opts}
+
+  defp cons_tail([head | tail], mode) do
+    {head, mode} = abstract(head, spend(mode, 1))
+    {tail, mode} = cons_tail(tail, mode)
+    {{:cons, anno(), head, tail}, mode}
   end
 
-  defp cons_tail(tail, _limit, mode), do: abstract(tail, mode)
+  defp cons_tail(tail, mode), do: abstract(tail, spend(mode, 1))
 
   defp decrement(:infinity), do: :infinity
   defp decrement(limit), do: limit - 1

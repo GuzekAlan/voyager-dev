@@ -74,6 +74,15 @@ defmodule VoyagerWeb.TermFormatterTest do
       assert erlang(<<200, 1, 2>>, limit: 2) == "<<200,1,...>>"
     end
 
+    test "spends one limit across nested collections, as Kernel.inspect/2 does" do
+      assert erlang([[1, 2, 3], [4, 5, 6], [7, 8, 9]], limit: 5) == "[[1, 2, 3], [...] | ...]"
+      assert erlang({{1, 2}, {3, 4}}, limit: 3) == "{{1, 2}, ...}"
+      assert erlang(%{a: [1, 2], b: [3, 4]}, limit: 3) == "\#{a => [1, 2], ... => ...}"
+      assert erlang([<<1, 2, 3>>, <<4>>], limit: 3) == "[<<1,2,...>> | ...]"
+      assert erlang(["abcdef", [1, 2]], limit: 2) == ~S|[<<"abcdef">>, [...]]|
+      assert erlang([1, 2 | {3, 4}], limit: 3) == "[1, 2 | {...}]"
+    end
+
     test "cuts text at the printable limit" do
       assert erlang(String.duplicate("a", 10), printable_limit: 3) == ~S|<<"aaa",...>>|
       assert erlang(~c"abcdef", printable_limit: 3) == ~S|"abc" ++ ...|
