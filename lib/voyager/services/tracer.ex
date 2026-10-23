@@ -16,6 +16,8 @@ defmodule Voyager.Services.Tracer do
 
   A session created with `save: true` gets a `Voyager.Schemas.TraceSession` row and
   writes every entry as it is appended; `load/1` makes it active again later.
+  Saved entries are capped by the `:trace_storage_limit_mb` setting: a run over it
+  stops with `:storage_limit`, and older sessions are pruned when a run ends.
   """
 
   use GenServer
@@ -29,6 +31,7 @@ defmodule Voyager.Services.Tracer do
   alias Voyager.Services.Tracer.Config
   alias Voyager.Services.Tracer.Run
   alias Voyager.Services.Tracer.Session
+  alias Voyager.Settings
 
   @topic "tracing"
   @kept_traces 500
@@ -36,6 +39,7 @@ defmodule Voyager.Services.Tracer do
   # ponytail: never-returning calls leak, so open calls reset past this; per-key LRU if pairs go missing.
   @max_open_calls 10_000
   @call_timeout Agent.default_timeout() + 1_000
+  @default_storage_limit_mb 100
 
   @type origin :: :ui | :mcp
 
@@ -46,6 +50,7 @@ defmodule Voyager.Services.Tracer do
           | :rate_limit
           | :time_limit
           | :mailbox_limit
+          | :storage_limit
           | :node_down
           | {:tracer_down, term()}
 
@@ -199,7 +204,13 @@ defmodule Voyager.Services.Tracer do
         -System.unique_integer([:positive])
       end
 
-    session = %Session{id: id, origin: origin, save: save, created_at: DateTime.utc_now()}
+    session = %Session{
+      id: id,
+      origin: origin,
+      save: save,
+      created_at: DateTime.utc_now(),
+      storage_limit: storage_limit()
+    }
 
     broadcast({:session_created, session})
     {:reply, {:ok, session}, %__MODULE__{session: session}}
@@ -361,7 +372,7 @@ defmodule Voyager.Services.Tracer do
           Enum.map(events, &Map.put(&1, :kind, :trace))
       )
 
-    {:noreply, state}
+    {:noreply, stop_over_limit(state)}
   end
 
   def handle_info(
@@ -404,12 +415,29 @@ defmodule Voyager.Services.Tracer do
       metadata: %{origin: run.origin, reason: reason}
     )
 
-    append(
-      %{state | session: session, run: nil},
-      dropped_entry(session.dropped - state.session.dropped) ++
-        [entry(:stopped, origin, reason: reason, traces: run_traces, dropped: run_dropped)]
-    )
+    state =
+      append(
+        %{state | session: session, run: nil},
+        dropped_entry(session.dropped - state.session.dropped) ++
+          [entry(:stopped, origin, reason: reason, traces: run_traces, dropped: run_dropped)]
+      )
+
+    # ponytail: pruning only when a run ends lets disk peak near 2x the limit; prune per batch if that bites.
+    if session.save, do: TraceSessionActions.prune(session.storage_limit, session.id)
+
+    state
   end
+
+  defp stop_over_limit(%{session: session, run: %Run{stop_request: nil} = run} = state)
+       when session.bytes > session.storage_limit do
+    Agent.call(session.node, :trace_stop, [session.tracer], Agent.default_timeout())
+    %{state | run: %{run | stop_request: {:storage_limit, nil}}}
+  end
+
+  defp stop_over_limit(state), do: state
+
+  defp storage_limit,
+    do: Settings.get(:trace_storage_limit_mb, @default_storage_limit_mb) * 1_000_000
 
   defp pair_returns(events, open_calls) do
     open_calls = if map_size(open_calls) > @max_open_calls, do: %{}, else: open_calls
@@ -450,6 +478,7 @@ defmodule Voyager.Services.Tracer do
       traces: row.traces,
       dropped: row.dropped,
       bytes: row.bytes,
+      storage_limit: storage_limit(),
       seq: TraceEntryQueries.next_seq(row.id),
       started_at: row.started_at,
       stopped_at: row.stopped_at

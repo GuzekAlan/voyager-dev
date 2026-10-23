@@ -17,6 +17,18 @@ defmodule Voyager.TraceSessionsTest do
     assert %{status: :idle} = TraceSessionQueries.get(idle)
   end
 
+  test "prune/2 deletes the oldest saved sessions over the limit, never the kept one" do
+    session!(:stopped, 40)
+    %{id: empty} = session!(:stopped)
+    session!(:stopped, 40)
+    %{id: newer} = session!(:stopped, 30)
+    %{id: kept} = session!(:running, 50)
+
+    assert :ok = TraceSessionActions.prune(100, kept)
+
+    assert Enum.map(TraceSessionQueries.all(), & &1.id) == [kept, newer, empty]
+  end
+
   test "deleting a session deletes its entries" do
     %{id: id} = session!(:stopped)
     TraceEntryActions.insert_all(id, [trace(0, %{})])
@@ -118,8 +130,8 @@ defmodule Voyager.TraceSessionsTest do
 
   defp seqs(entries), do: Enum.map(entries, & &1.seq)
 
-  defp session!(status) do
-    {:ok, session} = TraceSessionActions.create(%{origin: :ui, status: status})
+  defp session!(status, bytes \\ 0) do
+    {:ok, session} = TraceSessionActions.create(%{origin: :ui, status: status, bytes: bytes})
     session
   end
 
