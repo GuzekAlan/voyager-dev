@@ -3,6 +3,7 @@ defmodule Voyager.Services.TracerTest do
   use ExUnit.Case, async: false
 
   alias Voyager.Services.Tracer
+  alias Voyager.Test.Recursive
   alias Voyager.Test.VoyagerAgentFixture
 
   setup do
@@ -133,6 +134,41 @@ defmodule Voyager.Services.TracerTest do
 
     assert_raise ArgumentError, ~r/invalid :order option/, fn -> Tracer.entries(1, order: :up) end
     assert_raise ArgumentError, fn -> Tracer.entries(1, sort: :asc) end
+  end
+
+  test "puts the call's duration on its return" do
+    assert {:ok, %{id: id}} = configure(%{return_trace: true, max_events: 4})
+    assert {:ok, _session} = Tracer.start(:ui)
+    Date.leap_year?(~D[2024-01-01])
+    Date.leap_year?(~D[2023-01-01])
+    assert_receive {:session_entries, %{id: ^id}, [%{kind: :stopped}]}
+
+    assert [call1, ret1, call2, ret2] = traces(id)
+    assert %{type: :return, value: false, duration_us: duration} = ret2
+    assert duration == ret2.at - call2.at
+    assert %{type: :return, value: true, duration_us: _} = ret1
+    refute Map.has_key?(call1, :duration_us)
+  end
+
+  test "a recursive call's inner duration is shorter than its outer one" do
+    Code.ensure_loaded!(Recursive)
+
+    assert {:ok, %{id: id}} =
+             configure(%{
+               module: "Elixir.Voyager.Test.Recursive",
+               function: "countdown",
+               return_trace: true,
+               max_events: 4
+             })
+
+    assert {:ok, _session} = Tracer.start(:ui)
+    Recursive.countdown(1)
+    assert_receive {:session_entries, %{id: ^id}, [%{kind: :stopped}]}
+
+    assert [outer_call, inner_call, inner_ret, outer_ret] = traces(id)
+    assert %{type: :call, args: [1]} = outer_call
+    assert %{type: :call, args: [0]} = inner_call
+    assert inner_ret.duration_us < outer_ret.duration_us
   end
 
   test "returns the config errors" do
@@ -293,6 +329,11 @@ defmodule Voyager.Services.TracerTest do
                     %{events: 0, dropped: 0, duration_ms: _}, %{origin: :ui, reason: :stopped}}
 
     assert_receive {:telemetry, [:voyager, :trace, :start_failed], _, %{origin: :mcp}}
+  end
+
+  defp traces(id) do
+    {:ok, %{entries: entries}} = Tracer.entries(id, since: 0)
+    Enum.filter(entries, &(&1.kind == :trace))
   end
 
   defp await_queued(len) do

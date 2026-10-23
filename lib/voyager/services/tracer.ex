@@ -4,7 +4,8 @@ defmodule Voyager.Services.Tracer do
 
   A session is created, configured, then switched on and off with `start/1` and
   `stop/1`; starting a stopped session resumes it. The tracer on the remote node
-  pushes event batches straight to this process.
+  pushes event batches straight to this process. With `return_trace`, returns and
+  exceptions get their call's `duration_us`.
 
   A session is a log of entries numbered by `seq`: `:configured`, `:started`,
   `:stopped`, `:trace` (a trace event) and `:dropped` (how many events were lost
@@ -24,6 +25,8 @@ defmodule Voyager.Services.Tracer do
   @topic "tracing"
   @kept_traces 500
   @max_mailbox 1_000
+  # ponytail: never-returning calls leak, so open calls reset past this; per-key LRU if pairs go missing.
+  @max_open_calls 10_000
   @call_timeout Agent.default_timeout() + 1_000
 
   @type origin :: :ui | :mcp
@@ -291,12 +294,17 @@ defmodule Voyager.Services.Tracer do
         do: {[], run.shed + length(events)},
         else: {events, run.shed}
 
+    {events, open_calls} =
+      if session.config.return_trace,
+        do: pair_returns(events, run.open_calls),
+        else: {events, run.open_calls}
+
     dropped = run.dropped_before + agent_dropped + shed
 
     session = %{session | traces: session.traces + length(events), dropped: dropped}
 
     state =
-      %{state | session: session, run: %{run | shed: shed}}
+      %{state | session: session, run: %{run | shed: shed, open_calls: open_calls}}
       |> append(
         dropped_entry(dropped - state.session.dropped) ++
           Enum.map(events, &Map.put(&1, :kind, :trace))
@@ -350,6 +358,29 @@ defmodule Voyager.Services.Tracer do
       dropped_entry(session.dropped - state.session.dropped) ++
         [entry(:stopped, origin, reason: reason, traces: run_traces, dropped: run_dropped)]
     )
+  end
+
+  defp pair_returns(events, open_calls) do
+    open_calls = if map_size(open_calls) > @max_open_calls, do: %{}, else: open_calls
+    Enum.map_reduce(events, open_calls, &pair_return/2)
+  end
+
+  defp pair_return(%{type: :call} = event, open_calls),
+    do: {event, Map.update(open_calls, {event.pid, event.mfa}, [event.at], &[event.at | &1])}
+
+  defp pair_return(event, open_calls) do
+    key = {event.pid, event.mfa}
+
+    case open_calls do
+      %{^key => [at | rest]} ->
+        open_calls =
+          if rest == [], do: Map.delete(open_calls, key), else: Map.put(open_calls, key, rest)
+
+        {Map.put(event, :duration_us, event.at - at), open_calls}
+
+      _no_call ->
+        {event, open_calls}
+    end
   end
 
   defp start_failed(reason, origin) do
