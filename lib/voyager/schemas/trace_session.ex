@@ -15,7 +15,7 @@ defmodule Voyager.Schemas.TraceSession do
           status: :idle | :running | :stopped | nil,
           node: String.t() | nil,
           config: map() | nil,
-          stop_reason: String.t() | nil,
+          stop_reason: Voyager.Services.Tracer.stop_reason() | nil,
           traces: non_neg_integer(),
           dropped: non_neg_integer(),
           bytes: non_neg_integer(),
@@ -30,7 +30,7 @@ defmodule Voyager.Schemas.TraceSession do
     field :status, Ecto.Enum, values: [:idle, :running, :stopped]
     field :node, :string
     field :config, :map
-    field :stop_reason, :string
+    field :stop_reason, Voyager.StoredTerm
     field :traces, :integer, default: 0
     field :dropped, :integer, default: 0
     field :bytes, :integer, default: 0

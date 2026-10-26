@@ -4,10 +4,10 @@ defmodule Voyager.Actions.TraceEntries do
   as `Voyager.Schemas.TraceEvent` rows, the rest as `Voyager.Schemas.TraceSessionEvent` rows.
   """
 
-  alias Voyager.Actions.TraceSessions, as: TraceSessionActions
   alias Voyager.Repo
   alias Voyager.Schemas.TraceEvent
   alias Voyager.Schemas.TraceSessionEvent
+  alias Voyager.StoredTerm
 
   # Measured on SQLite: id, session_id, seq, `at` as ISO text, kind, flags and the seq index.
   @row_overhead_bytes 64
@@ -15,8 +15,8 @@ defmodule Voyager.Actions.TraceEntries do
   @blank_session_event Map.new(TraceSessionEvent.__schema__(:fields) -- [:id], &{&1, nil})
 
   @doc """
-  Inserts the entries, with terms inspected and pids in the traced node's
-  `<0.X.Y>` form. Returns the bytes stored: the text plus a fixed cost per row.
+  Inserts the entries. A trace's `search_text` has its terms inspected, with pids
+  in the traced node's `<0.X.Y>` form. Returns the bytes stored plus a fixed cost per row.
   """
   @spec insert_all(integer(), [map()]) :: non_neg_integer()
   def insert_all(session_id, entries) do
@@ -53,7 +53,7 @@ defmodule Voyager.Actions.TraceEntries do
   defp session_event_fields(%{kind: :stopped} = entry) do
     %{
       origin: entry.origin,
-      reason: TraceSessionActions.stop_reason_text(entry.reason),
+      reason: StoredTerm.encode(entry.reason),
       traces: entry.traces,
       dropped: entry.dropped
     }
@@ -64,14 +64,30 @@ defmodule Voyager.Actions.TraceEntries do
   defp trace_row(session_id, %{mfa: {m, f, a}} = entry) do
     Map.merge(base(session_id, entry), %{
       type: entry.type,
-      pid: Voyager.Pid.format(entry.pid, :local),
-      process: if(entry.process != :undefined, do: inspect_term(entry.process)),
-      mfa: Exception.format_mfa(m, f, a),
-      args: if(Map.has_key?(entry, :args), do: inspect_term(entry.args)),
-      value: if(Map.has_key?(entry, :value), do: inspect_term(entry.value)),
-      truncated: Map.get(entry, :truncated, false),
-      duration_us: Map.get(entry, :duration_us)
+      pid: StoredTerm.encode(entry.pid),
+      process: StoredTerm.encode(entry.process),
+      module: Atom.to_string(m),
+      function: Atom.to_string(f),
+      arity: a,
+      args: if(Map.has_key?(entry, :args), do: StoredTerm.encode(entry.args)),
+      value: if(Map.has_key?(entry, :value), do: StoredTerm.encode(entry.value)),
+      truncated: entry[:truncated],
+      duration_us: entry[:duration_us],
+      search_text: search_text(entry)
     })
+  end
+
+  defp search_text(%{mfa: {m, f, a}} = entry) do
+    terms = for key <- [:args, :value], Map.has_key?(entry, key), do: inspect_term(entry[key])
+
+    Enum.join(
+      [
+        inspect_term(entry.pid),
+        inspect_term(entry.process),
+        Exception.format_mfa(m, f, a) | terms
+      ],
+      " "
+    )
   end
 
   defp base(session_id, entry),
@@ -85,9 +101,8 @@ defmodule Voyager.Actions.TraceEntries do
 
   defp row_bytes(row) do
     row
-    |> Map.take([:pid, :process, :mfa, :args, :value, :node, :reason])
     |> Map.values()
-    |> Enum.reject(&is_nil/1)
+    |> Enum.filter(&is_binary/1)
     |> Enum.reduce(@row_overhead_bytes, &(byte_size(&1) + &2))
   end
 end

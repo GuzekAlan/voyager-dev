@@ -2,7 +2,7 @@ defmodule Voyager.Schemas.TraceSessionEvent do
   @moduledoc """
   Ecto schema for what happened to a `Voyager.Schemas.TraceSession`: it was
   configured, started or stopped, or events were dropped. Each kind fills its own
-  fields; `dropped` is a `:dropped` event's count. Shares `seq` with `Voyager.Schemas.TraceEvent`.
+  fields; `dropped` is a `:dropped` event's count and `reason` a `Voyager.StoredTerm.encode/1` binary. Shares `seq` with `Voyager.Schemas.TraceEvent`.
   """
 
   use Ecto.Schema
@@ -17,7 +17,7 @@ defmodule Voyager.Schemas.TraceSessionEvent do
           origin: :ui | :mcp | nil,
           node: String.t() | nil,
           config: map() | nil,
-          reason: String.t() | nil,
+          reason: binary() | nil,
           traces: non_neg_integer() | nil,
           dropped: non_neg_integer() | nil
         }
@@ -30,7 +30,7 @@ defmodule Voyager.Schemas.TraceSessionEvent do
     field :origin, Ecto.Enum, values: [:ui, :mcp]
     field :node, :string
     field :config, :map
-    field :reason, :string
+    field :reason, :binary
     field :traces, :integer
     field :dropped, :integer
   end

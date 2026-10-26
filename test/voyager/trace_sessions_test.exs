@@ -5,6 +5,7 @@ defmodule Voyager.TraceSessionsTest do
   alias Voyager.Actions.TraceSessions, as: TraceSessionActions
   alias Voyager.Queries.TraceEntries, as: TraceEntryQueries
   alias Voyager.Queries.TraceSessions, as: TraceSessionQueries
+  alias Voyager.Schemas.TraceEvent
   alias Voyager.Services.Tracer.Config
 
   test "interrupt_running/0 stops running sessions" do
@@ -13,7 +14,7 @@ defmodule Voyager.TraceSessionsTest do
 
     assert :ok = TraceSessionActions.interrupt_running()
 
-    assert %{status: :stopped, stop_reason: "interrupted"} = TraceSessionQueries.get(running)
+    assert %{status: :stopped, stop_reason: :interrupted} = TraceSessionQueries.get(running)
     assert %{status: :idle} = TraceSessionQueries.get(idle)
   end
 
@@ -38,7 +39,7 @@ defmodule Voyager.TraceSessionsTest do
     assert {:error, :not_found} = TraceSessionActions.delete(id)
   end
 
-  test "round-trips control entries" do
+  test "round-trips session entries" do
     %{id: id} = session!(:stopped)
     config = %Config{module: "Elixir.Date", pids: ["<0.1.0>"], capture: :args, max_events: 5}
 
@@ -59,13 +60,7 @@ defmodule Voyager.TraceSessionsTest do
 
     TraceEntryActions.insert_all(id, entries)
 
-    assert [configured, started, dropped, stopped] =
-             TraceEntryQueries.page(id, since: 0, order: :asc, limit: 10)
-
-    assert configured == hd(entries)
-    assert started == Enum.at(entries, 1)
-    assert dropped == %{seq: 2, kind: :dropped, at: 3, count: 4}
-    assert %{reason: "{:tracer_down, :killed}", traces: 0, dropped: 4} = stopped
+    assert TraceEntryQueries.page(id, since: 0, order: :asc, limit: 10) == entries
 
     assert [%{seq: 3}, %{seq: 1}, %{seq: 0}] = TraceEntryQueries.controls(id)
     assert [%{seq: 2}] = TraceEntryQueries.traces(id, 10)
@@ -105,27 +100,50 @@ defmodule Voyager.TraceSessionsTest do
     assert TraceEntryQueries.page(id, limit: 10) == []
   end
 
-  test "insert_all/2 stores terms inspected and returns their bytes with the per-row cost" do
+  test "round-trips trace entries, a nil return value included" do
+    %{id: id} = session!(:running)
+
+    entries = [
+      trace(0, %{args: [self(), "bin", make_ref()], truncated: true}),
+      trace(1, %{type: :return, value: nil, truncated: false, duration_us: 12}),
+      trace(2, %{type: :exception, value: {:error, :badarg}, truncated: false}),
+      trace(3, %{process: {:proc_lib, :init_p, 5}})
+    ]
+
+    TraceEntryActions.insert_all(id, entries)
+
+    assert TraceEntryQueries.page(id, since: 0, order: :asc, limit: 10) == entries
+  end
+
+  test "insert_all/2 stores the inspected event as search text and counts its bytes" do
     %{id: id} = session!(:running)
     pid = self()
-
-    bytes =
-      TraceEntryActions.insert_all(id, [
-        trace(0, %{args: [pid, "bin"], truncated: true}),
-        trace(1, %{type: :return, value: :ok, duration_us: 12, process: :undefined})
-      ])
-
     pid_string = Voyager.Pid.format(pid, :local)
+    call = trace(0, %{args: [pid, "bin"], truncated: true})
 
-    assert [call, return] = TraceEntryQueries.page(id, since: 0, order: :asc, limit: 10)
+    bytes = TraceEntryActions.insert_all(id, [call])
 
-    assert %{kind: :trace, type: :call, mfa: "Date.leap_year?/1", process: ":my_server"} = call
-    assert %{pid: ^pid_string, truncated: true} = call
-    assert call.args == ~s([#PID#{pid_string}, "bin"])
-    assert %{type: :return, value: ":ok", duration_us: 12, process: nil, args: nil} = return
+    assert %{search_text: text} = Repo.get_by!(TraceEvent, session_id: id)
 
-    stored = [call.pid, call.process, call.mfa, call.args, return.pid, return.mfa, return.value]
-    assert bytes == (stored |> Enum.map(&byte_size/1) |> Enum.sum()) + 2 * 64
+    assert text ==
+             ~s(#PID#{pid_string} :my_server Date.leap_year?/1 [#PID#{pid_string}, "bin"])
+
+    terms = [pid, :my_server, call.args] |> Enum.map(&:erlang.external_size/1) |> Enum.sum()
+
+    assert bytes ==
+             64 + terms + byte_size(text) + byte_size("Elixir.Date") + byte_size("leap_year?")
+  end
+
+  test "compresses large terms and counts the compressed bytes" do
+    %{id: id} = session!(:running)
+    args = [List.duplicate(%{state: :running, name: "worker"}, 200)]
+
+    bytes = TraceEntryActions.insert_all(id, [trace(0, %{args: args, truncated: false})])
+
+    assert [%{args: ^args}] = TraceEntryQueries.page(id, limit: 1)
+    assert %{args: stored} = Repo.get_by!(TraceEvent, session_id: id)
+    assert byte_size(stored) < :erlang.external_size(args) / 10
+    assert bytes < :erlang.external_size(args)
   end
 
   defp seqs(entries), do: Enum.map(entries, & &1.seq)

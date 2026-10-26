@@ -32,7 +32,7 @@ defmodule Voyager.Services.Tracer.Session do
           config: Config.t() | nil,
           tracer: pid() | nil,
           status: :idle | :running | :stopped,
-          stop_reason: Voyager.Services.Tracer.stop_reason() | String.t() | nil,
+          stop_reason: Voyager.Services.Tracer.stop_reason() | nil,
           traces: non_neg_integer(),
           dropped: non_neg_integer(),
           bytes: non_neg_integer(),

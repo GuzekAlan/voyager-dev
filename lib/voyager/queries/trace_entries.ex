@@ -2,8 +2,7 @@ defmodule Voyager.Queries.TraceEntries do
   @moduledoc """
   Reads the log of a saved tracing session from its `Voyager.Schemas.TraceSessionEvent`
   and `Voyager.Schemas.TraceEvent` rows, merged by their shared `seq`. Entries come back
-  in the `Voyager.Services.Tracer` entry shape, with `at` in microseconds, a `:dropped`
-  entry's `count`, and the stored text in place of terms.
+  in the `Voyager.Services.Tracer` entry shape, with `at` in microseconds.
   """
 
   import Ecto.Query
@@ -11,6 +10,7 @@ defmodule Voyager.Queries.TraceEntries do
   alias Voyager.Schemas.TraceEvent
   alias Voyager.Schemas.TraceSessionEvent
   alias Voyager.Services.Tracer.Config
+  alias Voyager.StoredTerm
 
   @doc """
   Up to `:limit` entries with `seq` in `[:since, :before)`, `:order` (default `:desc`) by `seq`.
@@ -72,9 +72,25 @@ defmodule Voyager.Queries.TraceEntries do
   defp limit_to(query, limit), do: limit(query, ^limit)
 
   defp to_entry(%TraceEvent{} = row) do
+    terms =
+      for field <- [:args, :value],
+          bin = Map.fetch!(row, field),
+          into: %{},
+          do: {field, StoredTerm.decode(bin)}
+
     row
-    |> Map.take([:seq, :type, :pid, :process, :mfa, :args, :value, :truncated, :duration_us])
-    |> Map.merge(%{kind: :trace, at: DateTime.to_unix(row.at, :microsecond)})
+    |> Map.take([:truncated, :duration_us])
+    |> Map.reject(fn {_field, value} -> is_nil(value) end)
+    |> Map.merge(terms)
+    |> Map.merge(%{
+      seq: row.seq,
+      kind: :trace,
+      at: DateTime.to_unix(row.at, :microsecond),
+      type: row.type,
+      pid: StoredTerm.decode(row.pid),
+      process: StoredTerm.decode(row.process),
+      mfa: {String.to_atom(row.module), String.to_atom(row.function), row.arity}
+    })
   end
 
   defp to_entry(%TraceSessionEvent{} = row) do
@@ -95,7 +111,12 @@ defmodule Voyager.Queries.TraceEntries do
   defp fields(%{kind: :started} = row), do: %{origin: row.origin}
 
   defp fields(%{kind: :stopped} = row),
-    do: %{origin: row.origin, reason: row.reason, traces: row.traces, dropped: row.dropped}
+    do: %{
+      origin: row.origin,
+      reason: StoredTerm.decode(row.reason),
+      traces: row.traces,
+      dropped: row.dropped
+    }
 
-  defp fields(%{kind: :dropped} = row), do: %{count: row.dropped}
+  defp fields(%{kind: :dropped} = row), do: %{origin: row.origin, count: row.dropped}
 end

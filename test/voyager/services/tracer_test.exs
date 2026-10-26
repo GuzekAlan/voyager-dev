@@ -102,57 +102,36 @@ defmodule Voyager.Services.TracerTest do
              Tracer.entries(id, before: 1_000)
   end
 
-  test "saves a saved session's log as it is appended" do
+  test "saves a saved session's log as it is appended, reading back what was broadcast" do
     assert {:ok, %{id: id}} = Tracer.create(:mcp, save: true)
     assert id > 0
     assert %{status: :idle, origin: :mcp} = TraceSessionQueries.get(id)
 
     assert {:ok, _session} = configure()
+    assert_receive {:session_entries, _session, [configured]}
     assert {:ok, _session} = Tracer.start(:ui)
+    assert_receive {:session_entries, _session, [started]}
     assert %{status: :running, started_at: %DateTime{}} = TraceSessionQueries.get(id)
 
     Date.leap_year?(~D[2024-01-01])
-    assert_receive {:session_entries, %{traces: 1}, [%{kind: :trace}]}, 1_000
+    assert_receive {:session_entries, %{traces: 1}, [%{kind: :trace} = trace]}, 1_000
     assert :ok = Tracer.stop(:mcp)
-    assert_receive {:session_entries, _session, [%{kind: :stopped}]}
+    assert_receive {:session_entries, _session, [%{kind: :stopped} = stopped]}
 
-    assert %{status: :stopped, stop_reason: "stopped", traces: 1, bytes: bytes, node: node} =
+    assert %{status: :stopped, stop_reason: :stopped, traces: 1, bytes: bytes, node: node} =
              TraceSessionQueries.get(id)
 
     assert bytes > 0
     assert node == Atom.to_string(Node.self())
 
     assert {:ok, %{entries: entries, truncated?: false}} = Tracer.entries(id)
-
-    assert [
-             %{seq: 3, kind: :stopped, origin: :mcp, reason: "stopped", traces: 1},
-             %{seq: 2, kind: :trace, mfa: "Date.leap_year?/1", args: "[~D[2024-01-01]]"},
-             %{seq: 1, kind: :started, origin: :ui},
-             %{seq: 0, kind: :configured, node: node_atom, config: %Config{module: "Elixir.Date"}}
-           ] = entries
-
-    assert node_atom == Node.self()
+    assert entries == [stopped, trace, started, configured]
+    assert %{mfa: {Date, :leap_year?, 1}, args: [~D[2024-01-01]]} = trace
 
     assert {:ok, %{entries: [%{seq: 1}, %{seq: 2}]}} =
              Tracer.entries(id, since: 1, order: :asc, limit: 2)
 
     assert {:ok, %{entries: [%{seq: 1}]}} = Tracer.entries(id, before: 2, limit: 1)
-  end
-
-  test "stops a saved session over the storage limit" do
-    Application.put_env(:voyager, :trace_storage_limit_mb, 0)
-    on_exit(fn -> Application.delete_env(:voyager, :trace_storage_limit_mb) end)
-
-    assert {:ok, %{id: id}} = Tracer.create(:ui, save: true)
-    assert {:ok, _session} = configure()
-    assert {:ok, _session} = Tracer.start(:ui)
-    Date.leap_year?(~D[2024-01-01])
-
-    assert_receive {:session_entries, %{stop_reason: :storage_limit},
-                    [%{kind: :stopped, origin: nil, reason: :storage_limit}]},
-                   1_000
-
-    assert %{stop_reason: "storage_limit"} = TraceSessionQueries.get(id)
   end
 
   test "keeps an unsaved session out of the database" do

@@ -21,7 +21,7 @@ defmodule Voyager.Actions.TraceSessions do
         status: session.status,
         node: session.node && Atom.to_string(session.node),
         config: session.config && Map.from_struct(session.config),
-        stop_reason: stop_reason_text(session.stop_reason),
+        stop_reason: session.stop_reason,
         traces: session.traces,
         dropped: session.dropped,
         bytes: session.bytes,
@@ -74,15 +74,8 @@ defmodule Voyager.Actions.TraceSessions do
   def interrupt_running do
     TraceSession
     |> where(status: :running)
-    |> Repo.update_all(set: [status: :stopped, stop_reason: "interrupted"])
+    |> Repo.update_all(set: [status: :stopped, stop_reason: :interrupted])
 
     :ok
   end
-
-  @doc "How a `Voyager.Services.Tracer.stop_reason()` is stored."
-  @spec stop_reason_text(term()) :: String.t() | nil
-  def stop_reason_text(nil), do: nil
-  def stop_reason_text(reason) when is_binary(reason), do: reason
-  def stop_reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
-  def stop_reason_text(reason), do: inspect(reason)
 end

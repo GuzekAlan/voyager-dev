@@ -7,7 +7,7 @@ defmodule Voyager.Repo.Migrations.CreateTraceSessionsAndEvents do
       add :status, :string, null: false
       add :node, :string
       add :config, :map
-      add :stop_reason, :string
+      add :stop_reason, :binary
       add :traces, :integer, default: 0, null: false
       add :dropped, :integer, default: 0, null: false
       add :bytes, :integer, default: 0, null: false
@@ -25,7 +25,7 @@ defmodule Voyager.Repo.Migrations.CreateTraceSessionsAndEvents do
       add :origin, :string
       add :node, :string
       add :config, :map
-      add :reason, :string
+      add :reason, :binary
       add :traces, :integer
       add :dropped, :integer
     end
@@ -37,13 +37,16 @@ defmodule Voyager.Repo.Migrations.CreateTraceSessionsAndEvents do
       add :seq, :integer, null: false
       add :at, :utc_datetime_usec, null: false
       add :type, :string, null: false
-      add :pid, :string, null: false
-      add :process, :string
-      add :mfa, :string, null: false
-      add :args, :text
-      add :value, :text
-      add :truncated, :boolean, default: false, null: false
+      add :pid, :binary, null: false
+      add :process, :binary, null: false
+      add :module, :string, null: false
+      add :function, :string, null: false
+      add :arity, :integer, null: false
+      add :args, :binary
+      add :value, :binary
+      add :truncated, :boolean
       add :duration_us, :integer
+      add :search_text, :text, null: false
     end
 
     create unique_index(:trace_events, [:session_id, :seq])

@@ -51,6 +51,7 @@ defmodule Voyager.Services.Tracer do
           | :time_limit
           | :mailbox_limit
           | :storage_limit
+          | :interrupted
           | :node_down
           | {:tracer_down, term()}
 
