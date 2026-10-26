@@ -42,7 +42,7 @@ defmodule VoyagerWeb.ConnectLiveSshKeyTest do
     |> element("#ssh-passphrase-modal-form")
     |> render_submit(%{"passphrase" => %{"passphrase" => passphrase}})
 
-    render_async(view)
+    render_async(view, 5_000)
   end
 
   defp encrypted_pem!(dir) do
