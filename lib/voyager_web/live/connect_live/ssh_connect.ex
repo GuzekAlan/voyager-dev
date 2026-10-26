@@ -175,10 +175,13 @@ defmodule VoyagerWeb.ConnectLive.SshConnect do
             Advanced {if @show_ssh_advanced, do: "▾", else: "▸"}
           </button>
 
-          <div class={[
-            "border-base-300 mt-3 flex flex-col gap-3 rounded-lg border p-4",
-            not @show_ssh_advanced && "hidden"
-          ]}>
+          <div
+            id="ssh-advanced"
+            class={[
+              "border-base-300 mt-3 flex flex-col gap-3 rounded-lg border p-4",
+              not @show_ssh_advanced && "hidden"
+            ]}
+          >
             <div class="flex gap-3">
               <div class="flex-1">
                 <ConnectComponents.form_field
