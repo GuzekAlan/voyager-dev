@@ -136,6 +136,7 @@ defmodule Voyager.Services.Tracer do
   With `:since` the page starts there, oldest first; without it the page is the newest
   entries before `:before`, newest first. `truncated?` says entries in the range the page
   covers were evicted from memory.
+  Raises `ArgumentError` on an unknown option or a bad value.
   """
   @spec entries(pos_integer(),
           since: non_neg_integer(),
@@ -143,12 +144,16 @@ defmodule Voyager.Services.Tracer do
           limit: pos_integer()
         ) ::
           {:ok, %{entries: [entry()], truncated?: boolean()}} | {:error, :not_found}
-  def entries(id, opts \\ []),
-    do:
-      GenServer.call(
-        __MODULE__,
-        {:entries, id, Keyword.validate!(opts, [:since, :before, limit: 100])}
-      )
+  def entries(id, opts \\ []) do
+    opts = Keyword.validate!(opts, [:since, :before, limit: 100])
+
+    for {key, value} <- opts, not (is_integer(value) and value >= min_entries_opt(key)) do
+      raise ArgumentError,
+            "#{inspect(key)} must be an integer >= #{min_entries_opt(key)}, got: #{inspect(value)}"
+    end
+
+    GenServer.call(__MODULE__, {:entries, id, opts})
+  end
 
   @impl true
   def init(nil), do: {:ok, %__MODULE__{}}
@@ -362,6 +367,9 @@ defmodule Voyager.Services.Tracer do
   defp entry(kind, origin, fields \\ []),
     do:
       Map.merge(%{kind: kind, origin: origin, at: System.os_time(:microsecond)}, Map.new(fields))
+
+  defp min_entries_opt(:limit), do: 1
+  defp min_entries_opt(_since_or_before), do: 0
 
   defp dropped_entry(0), do: []
   defp dropped_entry(count), do: [entry(:dropped, nil, count: count)]

@@ -114,6 +114,22 @@ defmodule Voyager.Services.TracerTest do
            ]
   end
 
+  test "rejects invalid entries options" do
+    assert_raise ArgumentError, ~r/:limit must be an integer >= 1/, fn ->
+      Tracer.entries(1, limit: 0)
+    end
+
+    assert_raise ArgumentError, ~r/:since must be an integer >= 0/, fn ->
+      Tracer.entries(1, since: -1)
+    end
+
+    assert_raise ArgumentError, ~r/:before must be an integer >= 0/, fn ->
+      Tracer.entries(1, before: "9")
+    end
+
+    assert_raise ArgumentError, fn -> Tracer.entries(1, order: :up) end
+  end
+
   test "returns the config errors" do
     assert {:error, %Ecto.Changeset{valid?: false}} = configure(%{module: nil})
     refute_receive {:session_entries, _session, _entries}
