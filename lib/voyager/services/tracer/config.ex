@@ -98,7 +98,7 @@ defmodule Voyager.Services.Tracer.Config do
       get_field(changeset, :processes) != :pids ->
         changeset
 
-      pids == [] ->
+      pids in [nil, []] ->
         add_error(changeset, :pids, "can't be blank")
 
       length(pids) > @max_pids ->
