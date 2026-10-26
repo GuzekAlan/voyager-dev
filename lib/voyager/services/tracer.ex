@@ -36,7 +36,7 @@ defmodule Voyager.Services.Tracer do
   @topic "tracing"
   @kept_traces 500
   @max_mailbox 1_000
-  # ponytail: never-returning calls leak, so open calls reset past this; per-key LRU if pairs go missing.
+  # Returns that never come would grow the open calls forever, so they reset past this.
   @max_open_calls 10_000
   @call_timeout Agent.default_timeout() + 1_000
   @default_storage_limit_mb 100
@@ -423,7 +423,7 @@ defmodule Voyager.Services.Tracer do
           [entry(:stopped, origin, reason: reason, traces: run_traces, dropped: run_dropped)]
       )
 
-    # ponytail: pruning only when a run ends lets disk peak near 2x the limit; prune per batch if that bites.
+    # Pruning only here lets disk peak near twice the limit.
     if session.save, do: TraceSessionActions.prune(session.storage_limit, session.id)
 
     state
