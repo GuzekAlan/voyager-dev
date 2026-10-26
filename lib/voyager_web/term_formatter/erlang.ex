@@ -144,7 +144,7 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
   defp string(chars, false), do: {:string, anno(), chars}
   defp string(chars, true), do: {:op, anno(), :++, {:string, anno(), chars}, @elision}
 
-  # Cons pattern `[P_h | P_t]`
+  # Cons expression `[P_h | P_t]`
   defp cons(_list, %Inspect.Opts{limit: 0} = opts),
     do: {{:cons, anno(), @elision, {nil, anno()}}, opts}
 
