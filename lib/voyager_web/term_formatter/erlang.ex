@@ -179,23 +179,6 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
     {:bin, anno, elements ++ elision_element(true)}
   end
 
-  defp text_end?(list, rest) when is_list(list), do: rest == []
-  defp text_end?(_bitstring, rest), do: rest == ""
-
-  defp take_chars(list, limit, acc) when is_list(list), do: take_list_chars(list, limit, acc)
-  defp take_chars(bitstring, limit, acc), do: take_binary_chars(bitstring, limit, acc)
-
-  defp take_list_chars([char | rest], limit, acc) when limit == :infinity or limit > 0,
-    do: take_list_chars(rest, decrement(limit), [char | acc])
-
-  defp take_list_chars(rest, _limit, acc), do: {Enum.reverse(acc), rest}
-
-  defp take_binary_chars(<<char::utf8, rest::bitstring>>, limit, acc)
-       when limit == :infinity or limit > 0,
-       do: take_binary_chars(rest, decrement(limit), [char | acc])
-
-  defp take_binary_chars(rest, _limit, acc), do: {Enum.reverse(acc), rest}
-
   defp text(chardata), do: {:text, :unicode.characters_to_list(chardata)}
 
   defp call(fun, arg) do
@@ -216,6 +199,23 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
       true -> :error
     end
   end
+
+  defp text_end?(list, rest) when is_list(list), do: rest == []
+  defp text_end?(_bitstring, rest), do: rest == ""
+
+  defp take_chars(list, limit, acc) when is_list(list), do: take_list_chars(list, limit, acc)
+  defp take_chars(bitstring, limit, acc), do: take_binary_chars(bitstring, limit, acc)
+
+  defp take_list_chars([char | rest], limit, acc) when limit == :infinity or limit > 0,
+    do: take_list_chars(rest, decrement(limit), [char | acc])
+
+  defp take_list_chars(rest, _limit, acc), do: {Enum.reverse(acc), rest}
+
+  defp take_binary_chars(<<char::utf8, rest::bitstring>>, limit, acc)
+       when limit == :infinity or limit > 0,
+       do: take_binary_chars(rest, decrement(limit), [char | acc])
+
+  defp take_binary_chars(rest, _limit, acc), do: {Enum.reverse(acc), rest}
 
   # Lists follow observer under the default `+pc latin1`, so [200, 404, 500] stays numbers;
   # binaries follow `+pc unicode`, so UTF-8 text is not shown as bytes.
