@@ -85,6 +85,7 @@ defmodule Voyager.MCP.Tools.ConnectTest do
 
     test "treats the same SSH host on another port as another node" do
       enable_proxy_epmd(%{})
+      insert!(%SshConnection{ssh_user: "deploy", ssh_host: "gw", node_name: "app@127.0.0.1"})
       session = Fakes.node_session(node_name: "app@127.0.0.1", connector: SshConnector)
       Fakes.connect_node!(%{session | meta: @ssh_meta})
       args = %{"node_name" => "app@127.0.0.1", "ssh_user" => "deploy", "ssh_host" => "gw"}

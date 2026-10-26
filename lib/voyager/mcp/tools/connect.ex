@@ -119,17 +119,22 @@ defmodule Voyager.MCP.Tools.Connect do
       %Connection{node_name: node_name, name_type: Map.fetch!(@name_types, params.name_type)}
   end
 
-  defp ssh_target(node_name, user, host, params) do
-    SshConnectionQueries.get_by_profile(user, host, params.ssh_port, node_name) ||
-      %SshConnection{
-        ssh_user: user,
-        ssh_host: host,
-        ssh_port: params.ssh_port,
-        node_name: node_name,
-        name_type: Map.fetch!(@name_types, params.name_type),
-        auth_method: Map.fetch!(@auth_methods, params.auth_method),
-        epmd_port: params.epmd_port
-      }
+  defp ssh_target(node_name, user, host, %{epmd_port: epmd_port} = params) do
+    case SshConnectionQueries.get_by_profile(user, host, params.ssh_port, node_name) do
+      %SshConnection{epmd_port: ^epmd_port} = saved ->
+        saved
+
+      _ ->
+        %SshConnection{
+          ssh_user: user,
+          ssh_host: host,
+          ssh_port: params.ssh_port,
+          node_name: node_name,
+          name_type: Map.fetch!(@name_types, params.name_type),
+          auth_method: Map.fetch!(@auth_methods, params.auth_method),
+          epmd_port: epmd_port
+        }
+    end
   end
 
   defp connect(target, session) do
