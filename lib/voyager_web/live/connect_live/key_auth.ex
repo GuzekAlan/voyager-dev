@@ -58,6 +58,8 @@ defmodule VoyagerWeb.ConnectLive.KeyAuth do
     |> decoded(p, result, start)
   end
 
+  def handle_decode(socket, {:exit, {:shutdown, :cancel}}, _start), do: socket
+
   def handle_decode(socket, {:exit, _reason}, _start) do
     socket
     |> assign(:checking_passphrase?, false)
