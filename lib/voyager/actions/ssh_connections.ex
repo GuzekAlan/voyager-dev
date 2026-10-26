@@ -11,6 +11,7 @@ defmodule Voyager.Actions.SshConnections do
           auth_method: :agent | :password | :key,
           password: String.t() | nil,
           key_path: String.t() | nil,
+          agent_socket_path: String.t() | nil,
           epmd_port: integer()
         ]
 
@@ -27,15 +28,22 @@ defmodule Voyager.Actions.SshConnections do
     cookie = Keyword.get(opts, :cookie)
     password = Keyword.get(opts, :password)
     key_path = Keyword.get(opts, :key_path)
+    agent_socket_path = Keyword.get(opts, :agent_socket_path)
     name_type = Keyword.get(opts, :name_type) || :longnames
     auth_method = Keyword.get(opts, :auth_method) || :agent
     epmd_port = Keyword.get(opts, :epmd_port) || 4369
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     saved_values =
-      Enum.reject([cookie: cookie, password: password, key_path: key_path], fn {_field, value} ->
-        is_nil(value)
-      end)
+      Enum.reject(
+        [
+          cookie: cookie,
+          password: password,
+          key_path: key_path,
+          agent_socket_path: agent_socket_path
+        ],
+        fn {_field, value} -> is_nil(value) end
+      )
 
     on_conflict_set =
       [
@@ -57,6 +65,7 @@ defmodule Voyager.Actions.SshConnections do
       auth_method: auth_method,
       password: password,
       key_path: key_path,
+      agent_socket_path: agent_socket_path,
       epmd_port: epmd_port,
       last_connected_at: now
     })
