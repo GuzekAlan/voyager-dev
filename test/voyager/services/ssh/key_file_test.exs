@@ -16,6 +16,7 @@ defmodule Voyager.Services.SSH.KeyFileTest do
   defp assert_decrypts(path, public_key) do
     assert KeyFile.decode(path, nil) == {:error, :key_passphrase_required}
     assert KeyFile.decode(path, "wrong-passphrase") == {:error, :key_bad_passphrase}
+    assert KeyFile.decode(path, "") == {:error, :key_bad_passphrase}
     assert {:ok, key} = KeyFile.decode(path, @passphrase)
     assert :ssh_file.extract_public_key(key) == public_key
   end
