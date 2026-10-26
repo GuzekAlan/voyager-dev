@@ -41,7 +41,7 @@ defmodule Voyager.Services.SSH.Erlssh do
   @impl true
   def close(conn), do: :ssh.close(conn)
 
-  defp auth_opts(:agent), do: [key_cb: {:ssh_agent, []}]
+  defp auth_opts({:agent, nil}), do: [key_cb: {:ssh_agent, []}]
   defp auth_opts({:password, pass}), do: [password: String.to_charlist(pass)]
 
   defp auth_opts({:key, path, passphrase}),

@@ -67,7 +67,7 @@ defmodule VoyagerWeb.FormSchemas.SshConnectionParams do
   end
 
   @spec to_auth(t()) :: SSH.auth()
-  def to_auth(%__MODULE__{auth_method: :agent}), do: :agent
+  def to_auth(%__MODULE__{auth_method: :agent}), do: {:agent, nil}
 
   def to_auth(%__MODULE__{auth_method: :password, password: pw}) when is_binary(pw),
     do: {:password, pw}
