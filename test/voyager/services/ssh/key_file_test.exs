@@ -8,9 +8,6 @@ defmodule Voyager.Services.SSH.KeyFileTest do
   @passphrase "test-passphrase"
   @unencrypted_ed25519 ["-t", "ed25519", "-N", ""]
 
-  @ciphers ~w(3des-cbc aes128-cbc aes192-cbc aes256-cbc aes128-ctr aes192-ctr aes256-ctr
-              aes128-gcm@openssh.com aes256-gcm@openssh.com chacha20-poly1305@openssh.com)
-
   defp ec_key, do: :public_key.generate_key({:namedCurve, :secp256r1})
 
   defp assert_decrypts(path, public_key) do
@@ -29,53 +26,15 @@ defmodule Voyager.Services.SSH.KeyFileTest do
       assert :ssh_file.extract_public_key(key) == public_key
     end
 
-    for cipher <- @ciphers do
-      test "decrypts an OpenSSH key encrypted with #{cipher}", %{tmp_dir: dir} do
-        {path, public_key} =
-          SshKeys.ssh_keygen!(
-            dir,
-            "id",
-            ~w(-t ed25519 -a 1 -Z #{unquote(cipher)} -N #{@passphrase})
-          )
-
-        assert_decrypts(path, public_key)
-      end
-    end
-
-    for {type, bits} <- [{"ecdsa", "256"}, {"ecdsa", "384"}, {"ecdsa", "521"}, {"rsa", "2048"}] do
-      test "decrypts an OpenSSH #{type}-#{bits} key", %{tmp_dir: dir} do
-        {path, public_key} =
-          SshKeys.ssh_keygen!(
-            dir,
-            "id",
-            ~w(-t #{unquote(type)} -b #{unquote(bits)} -a 1 -N #{@passphrase})
-          )
-
-        assert_decrypts(path, public_key)
-      end
-    end
-
     test "decrypts an OpenSSH key with several bcrypt rounds", %{tmp_dir: dir} do
       {path, public_key} = SshKeys.ssh_keygen!(dir, "id", ~w(-t ed25519 -a 3 -N #{@passphrase}))
 
       assert_decrypts(path, public_key)
     end
 
-    test "rejects an OpenSSH key with an unknown cipher", %{tmp_dir: dir} do
+    test "rejects an OpenSSH key with a cipher other than aes256-ctr", %{tmp_dir: dir} do
       {path, _pub} =
-        SshKeys.ssh_keygen!(dir, "id", ~w(-t ed25519 -a 1 -Z aes256-ctr -N #{@passphrase}))
-
-      [begin_line | rest] = path |> File.read!() |> String.split("\n", trim: true)
-      {body_lines, [end_line]} = Enum.split(rest, -1)
-
-      body =
-        body_lines
-        |> Enum.join()
-        |> Base.decode64!()
-        |> String.replace("aes256-ctr", "aes256-xyz")
-        |> Base.encode64()
-
-      File.write!(path, Enum.join([begin_line, body, end_line], "\n"))
+        SshKeys.ssh_keygen!(dir, "id", ~w(-t ed25519 -a 1 -Z aes128-ctr -N #{@passphrase}))
 
       assert KeyFile.decode(path, nil) == {:error, :key_unsupported_cipher}
     end

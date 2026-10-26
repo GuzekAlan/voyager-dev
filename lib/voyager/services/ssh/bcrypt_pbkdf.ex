@@ -36,19 +36,11 @@ defmodule Voyager.Services.SSH.BcryptPbkdf do
   def derive(passphrase, salt, rounds, key_len) do
     sha2pass = :crypto.hash(:sha512, passphrase)
     stride = div(key_len + 31, 32)
-    amt = div(key_len + stride - 1, stride)
-    blocks = div(key_len + amt - 1, amt)
+    outs = List.to_tuple(for count <- 1..stride, do: block(sha2pass, salt, rounds, count))
 
-    outs = for count <- 1..blocks, do: {count, block(sha2pass, salt, rounds, count)}
-
-    bytes =
-      for {count, out} <- outs,
-          i <- 0..(amt - 1),
-          i * stride + count - 1 < key_len,
-          into: %{},
-          do: {i * stride + count - 1, :binary.at(out, i)}
-
-    for i <- 0..(key_len - 1), into: <<>>, do: <<Map.fetch!(bytes, i)>>
+    for i <- 0..(key_len - 1),
+        into: <<>>,
+        do: <<:binary.at(elem(outs, rem(i, stride)), div(i, stride))>>
   end
 
   defp block(sha2pass, salt, rounds, count) do
