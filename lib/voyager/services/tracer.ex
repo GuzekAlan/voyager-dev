@@ -167,7 +167,7 @@ defmodule Voyager.Services.Tracer do
   covers were evicted from memory; saved sessions are read from the database and never are.
   Raises `ArgumentError` on an unknown option or a bad value.
   """
-  @spec entries(pos_integer(),
+  @spec entries(integer(),
           since: non_neg_integer(),
           before: non_neg_integer(),
           order: :asc | :desc,

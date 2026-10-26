@@ -43,18 +43,7 @@ defmodule Voyager.Schemas.TraceSession do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(session, attrs) do
     session
-    |> cast(attrs, [
-      :origin,
-      :status,
-      :node,
-      :config,
-      :stop_reason,
-      :traces,
-      :dropped,
-      :bytes,
-      :started_at,
-      :stopped_at
-    ])
+    |> cast(attrs, [:origin, :status])
     |> validate_required([:origin, :status])
   end
 end

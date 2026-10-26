@@ -5,7 +5,9 @@ defmodule Voyager.TraceSessionsTest do
   alias Voyager.Actions.TraceSessions, as: TraceSessionActions
   alias Voyager.Queries.TraceEntries, as: TraceEntryQueries
   alias Voyager.Queries.TraceSessions, as: TraceSessionQueries
+  alias Voyager.Repo
   alias Voyager.Schemas.TraceEvent
+  alias Voyager.Schemas.TraceSession
   alias Voyager.Services.Tracer.Config
 
   test "interrupt_running/0 stops running sessions" do
@@ -151,8 +153,7 @@ defmodule Voyager.TraceSessionsTest do
   defp seqs(entries), do: Enum.map(entries, & &1.seq)
 
   defp session!(status, bytes \\ 0) do
-    {:ok, session} = TraceSessionActions.create(%{origin: :ui, status: status, bytes: bytes})
-    session
+    Repo.insert!(%TraceSession{origin: :ui, status: status, bytes: bytes})
   end
 
   defp trace(seq, overrides) do
