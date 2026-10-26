@@ -47,14 +47,13 @@ defmodule Voyager.Services.Tracer do
 
   # `controls` keeps every configured/started/stopped entry, `traces` the newest
   # trace and dropped entries; both newest first.
-  defstruct session: nil, run: nil, controls: [], traces: [], evicted_upto: -1
+  defstruct session: nil, run: nil, controls: [], traces: []
 
   @typep state :: %__MODULE__{
            session: Session.t() | nil,
            run: Run.t() | nil,
            controls: [entry()],
-           traces: [entry()],
-           evicted_upto: integer()
+           traces: [entry()]
          }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -251,7 +250,7 @@ defmodule Voyager.Services.Tracer do
 
   def handle_call({:entries, id, opts}, _from, %{session: %{id: id} = session} = state) do
     since = Keyword.get(opts, :since, 0)
-    before = Keyword.get(opts, :before, session.seq)
+    before = min(Keyword.get(opts, :before, session.seq), session.seq)
     order = if Keyword.has_key?(opts, :since), do: :asc, else: :desc
 
     page =
@@ -260,6 +259,7 @@ defmodule Voyager.Services.Tracer do
       |> Enum.sort_by(& &1.seq, order)
       |> Enum.take(opts[:limit])
 
+    # Seqs have no gaps, so a seq in the covered range without an entry was evicted.
     # A full page covers the range up to its last entry; a short one the whole range.
     covered =
       case {order, length(page) == opts[:limit]} do
@@ -268,7 +268,7 @@ defmodule Voyager.Services.Tracer do
         _short -> since..(before - 1)//1
       end
 
-    {:reply, {:ok, %{entries: page, truncated?: evicted_in?(state, covered)}}, state}
+    {:reply, {:ok, %{entries: page, truncated?: length(page) < Range.size(covered)}}, state}
   end
 
   def handle_call({:entries, _id, _opts}, _from, state),
@@ -363,14 +363,6 @@ defmodule Voyager.Services.Tracer do
     do:
       Map.merge(%{kind: kind, origin: origin, at: System.os_time(:microsecond)}, Map.new(fields))
 
-  # Only trace and dropped entries are evicted, oldest first, so every seq up to
-  # `evicted_upto` that is not a kept control entry is gone.
-  @spec evicted_in?(state(), Range.t()) :: boolean()
-  defp evicted_in?(state, lo..hi//1) do
-    top = min(hi, state.evicted_upto)
-    top >= lo and top - lo + 1 > Enum.count(state.controls, &(&1.seq in lo..top//1))
-  end
-
   defp dropped_entry(0), do: []
   defp dropped_entry(count), do: [entry(:dropped, nil, count: count)]
 
@@ -385,14 +377,13 @@ defmodule Voyager.Services.Tracer do
 
     broadcast({:session_entries, session, entries})
 
-    {kept, evicted} = Enum.split(Enum.reverse(traces) ++ state.traces, @kept_traces)
+    kept = Enum.take(Enum.reverse(traces) ++ state.traces, @kept_traces)
 
     %{
       state
       | session: session,
         controls: Enum.reverse(controls) ++ state.controls,
-        traces: kept,
-        evicted_upto: if(evicted == [], do: state.evicted_upto, else: hd(evicted).seq)
+        traces: kept
     }
   end
 

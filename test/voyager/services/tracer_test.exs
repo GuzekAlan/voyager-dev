@@ -84,6 +84,9 @@ defmodule Voyager.Services.TracerTest do
     assert {:ok, %{entries: [%{seq: 2}, %{seq: 1}]}} = Tracer.entries(id, before: 3, limit: 2)
     assert {:ok, %{entries: [%{seq: 1}, %{seq: 2}]}} = Tracer.entries(id, since: 1, limit: 2)
     assert {:ok, %{entries: [], truncated?: false}} = Tracer.entries(id, since: 4)
+
+    assert {:ok, %{entries: [%{seq: 3}, _, _, _], truncated?: false}} =
+             Tracer.entries(id, before: 1_000)
   end
 
   test "resumes a stopped session" do
