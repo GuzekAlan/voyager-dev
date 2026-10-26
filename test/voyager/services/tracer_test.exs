@@ -82,8 +82,12 @@ defmodule Voyager.Services.TracerTest do
             }} = Tracer.entries(id)
 
     assert {:ok, %{entries: [%{seq: 2}, %{seq: 1}]}} = Tracer.entries(id, before: 3, limit: 2)
-    assert {:ok, %{entries: [%{seq: 1}, %{seq: 2}]}} = Tracer.entries(id, since: 1, limit: 2)
-    assert {:ok, %{entries: [], truncated?: false}} = Tracer.entries(id, since: 4)
+
+    assert {:ok, %{entries: [%{seq: 1}, %{seq: 2}]}} =
+             Tracer.entries(id, since: 1, order: :asc, limit: 2)
+
+    assert {:ok, %{entries: [%{seq: 3}, %{seq: 2}]}} = Tracer.entries(id, since: 1, limit: 2)
+    assert {:ok, %{entries: [], truncated?: false}} = Tracer.entries(id, since: 4, order: :asc)
 
     assert {:ok, %{entries: [%{seq: 3}, _, _, _], truncated?: false}} =
              Tracer.entries(id, before: 1_000)
@@ -115,19 +119,20 @@ defmodule Voyager.Services.TracerTest do
   end
 
   test "rejects invalid entries options" do
-    assert_raise ArgumentError, ~r/:limit must be an integer >= 1/, fn ->
+    assert_raise ArgumentError, ~r/invalid :limit option/, fn ->
       Tracer.entries(1, limit: 0)
     end
 
-    assert_raise ArgumentError, ~r/:since must be an integer >= 0/, fn ->
+    assert_raise ArgumentError, ~r/invalid :since option/, fn ->
       Tracer.entries(1, since: -1)
     end
 
-    assert_raise ArgumentError, ~r/:before must be an integer >= 0/, fn ->
+    assert_raise ArgumentError, ~r/invalid :before option/, fn ->
       Tracer.entries(1, before: "9")
     end
 
-    assert_raise ArgumentError, fn -> Tracer.entries(1, order: :up) end
+    assert_raise ArgumentError, ~r/invalid :order option/, fn -> Tracer.entries(1, order: :up) end
+    assert_raise ArgumentError, fn -> Tracer.entries(1, sort: :asc) end
   end
 
   test "returns the config errors" do
@@ -214,10 +219,10 @@ defmodule Voyager.Services.TracerTest do
              Tracer.entries(session.id, before: 4, limit: 3)
 
     assert {:ok, %{entries: [%{seq: 0}, %{seq: 1}, %{seq: 3}], truncated?: true}} =
-             Tracer.entries(session.id, since: 0, limit: 3)
+             Tracer.entries(session.id, since: 0, order: :asc, limit: 3)
 
     assert {:ok, %{entries: [%{seq: 3}], truncated?: false}} =
-             Tracer.entries(session.id, since: 3, limit: 1)
+             Tracer.entries(session.id, since: 3, order: :asc, limit: 1)
   end
 
   test "logs the drops reported when the run ends" do

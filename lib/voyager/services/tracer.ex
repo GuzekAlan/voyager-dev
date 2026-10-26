@@ -132,25 +132,21 @@ defmodule Voyager.Services.Tracer do
   def active, do: GenServer.call(__MODULE__, :active)
 
   @doc """
-  A page of up to `:limit` (100) entries of session `id` with `seq` in `[:since, :before)`.
-  With `:since` the page starts there, oldest first; without it the page is the newest
-  entries before `:before`, newest first. `truncated?` says entries in the range the page
-  covers were evicted from memory.
-  Raises `ArgumentError` on an unknown option or a bad value.
+  A page of up to `:limit` (default 100, at least 1) entries of session `id` with `seq` in
+  `[:since, :before)` (integers >= 0). `:order` is `:desc` (default) for the newest entries of the
+  range first or `:asc` for the oldest first. `truncated?` says entries in the range the page
+  covers were evicted from memory. Raises `ArgumentError` on an unknown option or a bad value.
   """
   @spec entries(pos_integer(),
           since: non_neg_integer(),
           before: non_neg_integer(),
+          order: :asc | :desc,
           limit: pos_integer()
         ) ::
           {:ok, %{entries: [entry()], truncated?: boolean()}} | {:error, :not_found}
   def entries(id, opts \\ []) do
-    opts = Keyword.validate!(opts, [:since, :before, limit: 100])
-
-    for {key, value} <- opts, not (is_integer(value) and value >= min_entries_opt(key)) do
-      raise ArgumentError,
-            "#{inspect(key)} must be an integer >= #{min_entries_opt(key)}, got: #{inspect(value)}"
-    end
+    opts = Keyword.validate!(opts, [:since, :before, order: :desc, limit: 100])
+    Enum.each(opts, fn {key, value} -> validate_entries_opt!(key, value) end)
 
     GenServer.call(__MODULE__, {:entries, id, opts})
   end
@@ -256,7 +252,7 @@ defmodule Voyager.Services.Tracer do
   def handle_call({:entries, id, opts}, _from, %{session: %{id: id} = session} = state) do
     since = Keyword.get(opts, :since, 0)
     before = min(Keyword.get(opts, :before, session.seq), session.seq)
-    order = if Keyword.has_key?(opts, :since), do: :asc, else: :desc
+    order = opts[:order]
 
     page =
       (state.controls ++ state.traces)
@@ -368,8 +364,15 @@ defmodule Voyager.Services.Tracer do
     do:
       Map.merge(%{kind: kind, origin: origin, at: System.os_time(:microsecond)}, Map.new(fields))
 
-  defp min_entries_opt(:limit), do: 1
-  defp min_entries_opt(_since_or_before), do: 0
+  defp validate_entries_opt!(:order, order) when order in [:asc, :desc], do: :ok
+  defp validate_entries_opt!(:limit, limit) when is_integer(limit) and limit >= 1, do: :ok
+
+  defp validate_entries_opt!(key, seq)
+       when key in [:since, :before] and is_integer(seq) and seq >= 0,
+       do: :ok
+
+  defp validate_entries_opt!(key, value),
+    do: raise(ArgumentError, "invalid #{inspect(key)} option: #{inspect(value)}")
 
   defp dropped_entry(0), do: []
   defp dropped_entry(count), do: [entry(:dropped, nil, count: count)]
