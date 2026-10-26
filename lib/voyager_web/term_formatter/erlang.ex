@@ -46,6 +46,8 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
     |> IO.chardata_to_string()
   end
 
+  defp text_hook({:text, chars}, _indent, _precedence, _options), do: chars
+
   defp line_length(%Inspect.Opts{pretty: true, width: width}) when is_integer(width), do: width
   defp line_length(_opts), do: @single_line
 
@@ -142,6 +144,7 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
   defp string(chars, false), do: {:string, anno(), chars}
   defp string(chars, true), do: {:op, anno(), :++, {:string, anno(), chars}, @elision}
 
+  # Cons pattern `[P_h | P_t]`
   defp cons(_list, %Inspect.Opts{limit: 0} = opts),
     do: {{:cons, anno(), @elision, {nil, anno()}}, opts}
 
@@ -176,24 +179,8 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
     {:bin, anno, elements ++ elision_element(true)}
   end
 
-  defp printable_prefix(text, limit) do
-    {chars, rest} = take_chars(text, limit, [])
-
-    cond do
-      not printable?(text, chars) -> :error
-      text_end?(text, rest) -> {:ok, chars, false}
-      is_integer(limit) and length(chars) == limit -> {:ok, chars, true}
-      true -> :error
-    end
-  end
-
   defp text_end?(list, rest) when is_list(list), do: rest == []
   defp text_end?(_bitstring, rest), do: rest == ""
-
-  # Lists follow observer under the default `+pc latin1`, so [200, 404, 500] stays numbers;
-  # binaries follow `+pc unicode`, so UTF-8 text is not shown as bytes.
-  defp printable?(list, chars) when is_list(list), do: :io_lib.printable_latin1_list(chars)
-  defp printable?(_bitstring, chars), do: :io_lib.printable_unicode_list(chars)
 
   defp take_chars(list, limit, acc) when is_list(list), do: take_list_chars(list, limit, acc)
   defp take_chars(bitstring, limit, acc), do: take_binary_chars(bitstring, limit, acc)
@@ -211,8 +198,6 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
 
   defp text(chardata), do: {:text, :unicode.characters_to_list(chardata)}
 
-  defp text_hook({:text, chars}, _indent, _precedence, _options), do: chars
-
   defp call(fun, arg) do
     remote = {:remote, anno(), {:atom, anno(), :erlang}, {:atom, anno(), fun}}
     {:call, anno(), remote, [arg]}
@@ -220,4 +205,20 @@ defmodule VoyagerWeb.TermFormatter.Erlang do
 
   # erl_anno:anno() is opaque to Dialyzer, so a literal 0 would not type-check.
   defp anno, do: :erl_anno.new(0)
+
+  defp printable_prefix(text, limit) do
+    {chars, rest} = take_chars(text, limit, [])
+
+    cond do
+      not printable?(text, chars) -> :error
+      text_end?(text, rest) -> {:ok, chars, false}
+      is_integer(limit) and length(chars) == limit -> {:ok, chars, true}
+      true -> :error
+    end
+  end
+
+  # Lists follow observer under the default `+pc latin1`, so [200, 404, 500] stays numbers;
+  # binaries follow `+pc unicode`, so UTF-8 text is not shown as bytes.
+  defp printable?(list, chars) when is_list(list), do: :io_lib.printable_latin1_list(chars)
+  defp printable?(_bitstring, chars), do: :io_lib.printable_unicode_list(chars)
 end
