@@ -74,7 +74,9 @@ defmodule Voyager.Actions.TraceSessions do
   def interrupt_running do
     TraceSession
     |> where(status: :running)
-    |> Repo.update_all(set: [status: :stopped, stop_reason: :interrupted])
+    |> Repo.update_all(
+      set: [status: :stopped, stop_reason: :interrupted, stopped_at: DateTime.utc_now()]
+    )
 
     :ok
   end

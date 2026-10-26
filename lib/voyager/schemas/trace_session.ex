@@ -37,9 +37,6 @@ defmodule Voyager.Schemas.TraceSession do
     field :started_at, :utc_datetime_usec
     field :stopped_at, :utc_datetime_usec
 
-    has_many :session_events, Voyager.Schemas.TraceSessionEvent, foreign_key: :session_id
-    has_many :events, Voyager.Schemas.TraceEvent, foreign_key: :session_id
-
     timestamps()
   end
 

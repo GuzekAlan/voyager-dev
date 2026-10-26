@@ -134,6 +134,20 @@ defmodule Voyager.Services.TracerTest do
     assert {:ok, %{entries: [%{seq: 1}]}} = Tracer.entries(id, before: 2, limit: 1)
   end
 
+  test "stops a saved run once its entries pass the storage limit" do
+    {:ok, _} = Voyager.Settings.put(:trace_storage_limit_mb, 0)
+    assert {:ok, %{id: id}} = Tracer.create(:mcp, save: true)
+    assert {:ok, _session} = configure()
+    assert {:ok, _session} = Tracer.start(:ui)
+
+    Date.leap_year?(~D[2024-01-01])
+
+    assert_receive {:session_entries, _session, [%{kind: :stopped, reason: :storage_limit}]},
+                   1_000
+
+    assert %{status: :stopped, stop_reason: :storage_limit} = TraceSessionQueries.get(id)
+  end
+
   test "keeps an unsaved session out of the database" do
     assert {:ok, %{id: id}} = configure(%{max_events: 1})
     assert id < 0

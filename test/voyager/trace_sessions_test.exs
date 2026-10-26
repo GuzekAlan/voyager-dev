@@ -14,7 +14,9 @@ defmodule Voyager.TraceSessionsTest do
 
     assert :ok = TraceSessionActions.interrupt_running()
 
-    assert %{status: :stopped, stop_reason: :interrupted} = TraceSessionQueries.get(running)
+    assert %{status: :stopped, stop_reason: :interrupted, stopped_at: %DateTime{}} =
+             TraceSessionQueries.get(running)
+
     assert %{status: :idle} = TraceSessionQueries.get(idle)
   end
 
