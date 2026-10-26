@@ -17,13 +17,13 @@ defmodule Voyager.MCP.Tools.Connect do
 
   alias Anubis.Server.Response
   alias Voyager.NodeSession
+  alias Voyager.NodeSession.ConnectError
   alias Voyager.ProxyEpmd
   alias Voyager.Queries.Connections, as: ConnectionQueries
   alias Voyager.Queries.SshConnections, as: SshConnectionQueries
   alias Voyager.Schemas.Connection
   alias Voyager.Schemas.SshConnection
   alias Voyager.Services.SavedConnections
-  alias VoyagerWeb.ConnectLive.ConnectError
 
   @name_types %{"longnames" => :longnames, "shortnames" => :shortnames}
   @auth_methods %{"agent" => :agent, "password" => :password}

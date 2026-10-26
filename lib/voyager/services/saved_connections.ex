@@ -12,6 +12,7 @@ defmodule Voyager.Services.SavedConnections do
   alias Voyager.NodeSession.Session
   alias Voyager.Schemas.Connection
   alias Voyager.Schemas.SshConnection
+  alias Voyager.Services.SSH.KeyFile
 
   @type saved :: Connection.t() | SshConnection.t()
 
@@ -22,6 +23,10 @@ defmodule Voyager.Services.SavedConnections do
 
   def ready?(%SshConnection{cookie: nil}), do: false
   def ready?(%SshConnection{auth_method: :password, password: nil}), do: false
+
+  def ready?(%SshConnection{auth_method: :key, key_path: path}),
+    do: KeyFile.check(path, nil) == :ok
+
   def ready?(%SshConnection{}), do: true
 
   @doc "Whether `session` is a live connection to the same node over the same route."
@@ -39,6 +44,8 @@ defmodule Voyager.Services.SavedConnections do
   def connected?(_saved, _session), do: false
 
   @spec connect(saved()) :: :ok | {:error, term()}
+  def connect(%{cookie: nil}), do: {:error, :missing_cookie}
+
   def connect(%Connection{} = c) do
     with :ok <- NodeSession.connect(c.node_name, c.cookie, name_type: c.name_type) do
       ConnectionActions.upsert_connected(c.node_name, name_type: c.name_type)
@@ -47,8 +54,18 @@ defmodule Voyager.Services.SavedConnections do
   end
 
   def connect(%SshConnection{} = c) do
-    auth = if c.auth_method == :password, do: {:password, c.password}, else: :agent
+    with {:ok, auth} <- ssh_auth(c), do: connect_ssh(c, auth)
+  end
 
+  defp ssh_auth(%{auth_method: :agent}), do: {:ok, :agent}
+  defp ssh_auth(%{auth_method: :password, password: nil}), do: {:error, :missing_password}
+  defp ssh_auth(%{auth_method: :password, password: password}), do: {:ok, {:password, password}}
+
+  defp ssh_auth(%{auth_method: :key, key_path: path}) do
+    with :ok <- KeyFile.check(path, nil), do: {:ok, {:key, path, nil}}
+  end
+
+  defp connect_ssh(c, auth) do
     opts = [
       ssh_user: c.ssh_user,
       ssh_host: c.ssh_host,

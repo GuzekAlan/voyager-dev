@@ -2,8 +2,8 @@ defmodule VoyagerWeb.ConnectLive do
   use VoyagerWeb, :live_view
 
   alias Voyager.NodeSession
+  alias Voyager.NodeSession.ConnectError
   alias VoyagerWeb.ConnectComponents
-  alias VoyagerWeb.ConnectLive.ConnectError
 
   @prefill_keys ~w(connection node_name name_type ssh_user ssh_host ssh_port epmd_port auth_method)
 

@@ -13,6 +13,7 @@ defmodule Voyager.Services.TrayStatus do
 
   alias Voyager.MCP
   alias Voyager.NodeSession
+  alias Voyager.NodeSession.ConnectError
   alias Voyager.Queries.Connections, as: ConnectionQueries
   alias Voyager.Queries.SshConnections, as: SshConnectionQueries
   alias Voyager.Schemas.Connection
@@ -37,7 +38,7 @@ defmodule Voyager.Services.TrayStatus do
       state = %{
         connection: connection_info(NodeSession.current()),
         mcp: mcp_info(MCP.info()),
-        last_connection: last_connectable(),
+        last_connection: last_connection(),
         connecting: false,
         connect_task: nil,
         error: nil
@@ -84,31 +85,41 @@ defmodule Voyager.Services.TrayStatus do
   end
 
   # Reply from the async_nolink connect task; :flush drops its trailing :DOWN.
-  def handle_info({ref, _result}, %{connect_task: ref} = state) do
+  def handle_info({ref, result}, %{connect_task: ref} = state) do
     Process.demonitor(ref, [:flush])
-    {:noreply, %{state | connect_task: nil}}
+    state = %{state | connect_task: nil}
+
+    case result do
+      {:error, reason} ->
+        {:noreply, push(%{state | connecting: false, error: reconnect_error(reason)})}
+
+      _ok ->
+        {:noreply, state}
+    end
   end
 
   # The connect task crashed, otherwise "Connecting…" would never clear.
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{connect_task: ref} = state) do
-    {:noreply, push(%{state | connecting: false, connect_task: nil, error: @connect_error})}
+    error = reconnect_error(:unexpected_exit)
+    {:noreply, push(%{state | connecting: false, connect_task: nil, error: error})}
   end
 
   def handle_info({:node_connecting, _node_name}, %{connecting: false} = state) do
     {:noreply, push(%{state | connecting: true, error: nil})}
   end
 
-  def handle_info({:node_connect_failed, _node_name, _reason}, state) do
+  # A tray reconnect reports its own error once the connect task replies.
+  def handle_info({:node_connect_failed, _node_name, _reason}, %{connect_task: nil} = state) do
     {:noreply, push(%{state | connecting: false, error: @connect_error})}
   end
 
   def handle_info({:node_connected, _node}, state) do
     state = %{state | connection: connection_info(NodeSession.current()), connecting: false}
-    {:noreply, push(%{state | last_connection: last_connectable()})}
+    {:noreply, push(%{state | last_connection: last_connection()})}
   end
 
   def handle_info({event, _node, _reason}, state) when event in [:node_disconnected, :nodedown] do
-    {:noreply, push(%{state | connection: nil, last_connection: last_connectable()})}
+    {:noreply, push(%{state | connection: nil, last_connection: last_connection()})}
   end
 
   def handle_info({:mcp_status, status}, state) do
@@ -133,8 +144,8 @@ defmodule Voyager.Services.TrayStatus do
   defp mcp_info(%{alive?: true, url: url}), do: %{url: url}
   defp mcp_info(_status), do: nil
 
-  defp last_connectable do
-    [ConnectionQueries.last_connectable(), SshConnectionQueries.last_connectable()]
+  defp last_connection do
+    [ConnectionQueries.last(), SshConnectionQueries.last()]
     |> Enum.reject(&is_nil/1)
     |> Enum.max_by(& &1.last_connected_at, DateTime, fn -> nil end)
   end
@@ -146,6 +157,13 @@ defmodule Voyager.Services.TrayStatus do
 
   defp last_connection_info(%SshConnection{} = connection),
     do: %{node: connection.node_name, connector: connector_label(:ssh), host: connection.ssh_host}
+
+  defp reconnect_error(reason), do: "#{reconnect_message(reason)}. Connect from Voyager instead"
+
+  defp reconnect_message(:missing_cookie), do: "No saved cookie"
+  defp reconnect_message(:missing_password), do: "No saved SSH password"
+  defp reconnect_message(:key_passphrase_required), do: "Key needs a passphrase"
+  defp reconnect_message(reason), do: ConnectError.message(reason)
 
   defp mcp_error(:port_in_use), do: "MCP port is already in use"
   defp mcp_error(:locked), do: "MCP server is controlled by application config"
