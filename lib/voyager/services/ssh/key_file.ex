@@ -6,11 +6,11 @@ defmodule Voyager.Services.SSH.KeyFile do
   alias Voyager.Services.LocalFiles
   alias Voyager.Services.SSH.OpensshKey
 
+  require OpensshKey
+
   @type reason ::
           OpensshKey.reason()
           | {:read_failed, {Path.t(), File.posix()}}
-
-  @openssh_begin "-----BEGIN OPENSSH PRIVATE KEY-----"
 
   @rsa_algorithms [:"rsa-sha2-256", :"rsa-sha2-512", :"ssh-rsa"]
 
@@ -45,7 +45,7 @@ defmodule Voyager.Services.SSH.KeyFile do
   @impl true
   def add_host_key(host, port, key, opts), do: :ssh_file.add_host_key(host, port, key, opts)
 
-  defp decode_pem(@openssh_begin <> _ = pem, passphrase) do
+  defp decode_pem(pem, passphrase) when OpensshKey.is_openssh_pem(pem) do
     case :ssh_file.decode(pem, :openssh_key_v1) do
       [{key, _attrs} | _] -> {:ok, key}
       _ -> OpensshKey.decrypt(pem, passphrase)

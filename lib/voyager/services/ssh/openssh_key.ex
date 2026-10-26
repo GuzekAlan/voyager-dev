@@ -6,6 +6,10 @@ defmodule Voyager.Services.SSH.OpensshKey do
   @begin "-----BEGIN OPENSSH PRIVATE KEY-----"
   @end_marker "-----END OPENSSH PRIVATE KEY-----"
 
+  defguard is_openssh_pem(pem)
+           when is_binary(pem) and byte_size(pem) >= byte_size(@begin) and
+                  binary_part(pem, 0, byte_size(@begin)) == @begin
+
   @type reason ::
           :key_passphrase_required
           | :key_bad_passphrase

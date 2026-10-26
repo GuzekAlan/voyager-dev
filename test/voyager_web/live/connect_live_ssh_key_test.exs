@@ -86,7 +86,7 @@ defmodule VoyagerWeb.ConnectLiveSshKeyTest do
 
   test "shows the passphrase check in progress", %{conn: conn, tmp_dir: dir} do
     {path, _public_key} =
-      SshKeys.ssh_keygen!(dir, "id_ed25519", ~w(-t ed25519 -a 1 -N #{@passphrase}))
+      SshKeys.ssh_keygen!(dir, "id_ed25519", ~w(-t ed25519 -a 16 -N #{@passphrase}))
 
     {:ok, view, _html} = live(conn, ~p"/?mode=ssh")
     submit_connect(view, path)
