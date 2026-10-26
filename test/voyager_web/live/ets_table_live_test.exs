@@ -385,7 +385,8 @@ defmodule VoyagerWeb.EtsTableLiveTest do
 
     test "copies a looked-up record in a form the Erlang shell parses", %{conn: conn} do
       name = named_table(:set)
-      record = {:k, %{list: [1, 2]}, :c.pid(0, 45, 0), :erlang.list_to_ref(~c"#Ref<0.9.8.7>")}
+      ref = make_ref()
+      record = {:k, %{list: [1, 2]}, :c.pid(0, 45, 0), ref}
       :ets.insert(name, record)
 
       view = open_lookup(conn, name)
@@ -395,7 +396,7 @@ defmodule VoyagerWeb.EtsTableLiveTest do
       assert has_element?(view, "#ets-lookup-0-term", "\#{")
       assert copied =~ "\#{list => [1, 2]}"
       assert copied =~ ~s|list_to_pid("<0.45.0>")|
-      assert copied =~ ~s|list_to_ref("#Ref<0.9.8.7>")|
+      assert copied =~ ~s|list_to_ref("#{:erlang.ref_to_list(ref)}")|
       assert erl_eval(copied) == record
     end
   end
