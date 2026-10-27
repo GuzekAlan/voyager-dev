@@ -26,7 +26,7 @@ defmodule Voyager.MCP.Tools.Connect do
   alias Voyager.Services.SavedConnections
 
   @name_types %{"longnames" => :longnames, "shortnames" => :shortnames}
-  @auth_methods %{"agent" => :agent, "password" => :password}
+  @auth_methods %{"agent" => :agent, "password" => :password, "key" => :key}
 
   schema do
     field :connection_id, :string,
@@ -53,7 +53,12 @@ defmodule Voyager.MCP.Tools.Connect do
     field :auth_method, :enum,
       values: Map.keys(@auth_methods),
       default: "agent",
-      description: "SSH auth: `agent` uses the local ssh-agent, `password` is typed in Voyager."
+      description:
+        "SSH auth: `agent` uses the local ssh-agent, `password` is typed in Voyager, " <>
+          "`key` reads `key_path` (its passphrase, if any, is typed in Voyager)."
+
+    field :key_path, :string,
+      description: "Private key file for `key` auth, e.g. \"~/.ssh/id_ed25519\"."
   end
 
   @impl true
@@ -132,6 +137,7 @@ defmodule Voyager.MCP.Tools.Connect do
           node_name: node_name,
           name_type: Map.fetch!(@name_types, params.name_type),
           auth_method: Map.fetch!(@auth_methods, params.auth_method),
+          key_path: Map.get(params, :key_path),
           epmd_port: epmd_port
         }
     end
@@ -211,8 +217,10 @@ defmodule Voyager.MCP.Tools.Connect do
       ssh_host: c.ssh_host,
       ssh_port: c.ssh_port,
       epmd_port: c.epmd_port,
-      auth_method: c.auth_method
+      auth_method: c.auth_method,
+      key_path: c.key_path
     ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   defp form_params(%SshConnection{id: id}), do: [mode: "ssh", connection: id]

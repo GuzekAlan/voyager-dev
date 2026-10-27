@@ -24,6 +24,8 @@ defmodule Voyager.Services.SavedConnections do
   def ready?(%SshConnection{cookie: nil}), do: false
   def ready?(%SshConnection{auth_method: :password, password: nil}), do: false
 
+  def ready?(%SshConnection{auth_method: :key, key_path: nil}), do: false
+
   def ready?(%SshConnection{auth_method: :key, key_path: path}),
     do: KeyFile.check(path, nil) == :ok
 

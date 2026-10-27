@@ -5,7 +5,7 @@ defmodule VoyagerWeb.ConnectLive do
   alias Voyager.NodeSession.ConnectError
   alias VoyagerWeb.ConnectComponents
 
-  @prefill_keys ~w(connection node_name name_type ssh_user ssh_host ssh_port epmd_port auth_method)
+  @prefill_keys ~w(connection node_name name_type ssh_user ssh_host ssh_port epmd_port auth_method key_path)
 
   @impl true
   def mount(_params, _session, socket) do

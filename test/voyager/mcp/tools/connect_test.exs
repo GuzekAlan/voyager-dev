@@ -12,6 +12,7 @@ defmodule Voyager.MCP.Tools.ConnectTest do
   alias Voyager.NodeSession.Connectors.Ssh, as: SshConnector
   alias Voyager.Schemas.Connection
   alias Voyager.Schemas.SshConnection
+  alias Voyager.Test.SshKeys
 
   @ssh_meta %{ssh_user: "deploy", ssh_host: "gw", ssh_port: 22, epmd_port: 4369}
 
@@ -148,6 +149,51 @@ defmodule Voyager.MCP.Tools.ConnectTest do
                "ssh_port" => "22",
                "auth_method" => "password"
              } = path |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+    end
+
+    @tag :tmp_dir
+    test "opens the SSH form with the key path for a passphrase-protected key", %{tmp_dir: dir} do
+      enable_proxy_epmd(%{})
+      Process.register(self(), ElixirKit.PubSub)
+      key = :public_key.generate_key({:namedCurve, :secp256r1})
+      {key_path, _pub} = SshKeys.pem!(dir, "id_ecdsa", key, "passphrase")
+
+      assert %{"status" => "awaiting_user"} =
+               %{
+                 "node_name" => "app@10.0.0.5",
+                 "ssh_user" => "deploy",
+                 "ssh_host" => "gw",
+                 "auth_method" => "key",
+                 "key_path" => key_path
+               }
+               |> execute()
+               |> run()
+
+      assert_received {:"$gen_cast", {:broadcast, "messages", "open:" <> path}}
+
+      assert %{"auth_method" => "key", "key_path" => ^key_path} =
+               path |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+    end
+
+    test "opens the SSH form on key auth when no key path is given" do
+      enable_proxy_epmd(%{})
+      Process.register(self(), ElixirKit.PubSub)
+
+      assert %{"status" => "awaiting_user"} =
+               %{
+                 "node_name" => "app@10.0.0.5",
+                 "ssh_user" => "deploy",
+                 "ssh_host" => "gw",
+                 "auth_method" => "key"
+               }
+               |> execute()
+               |> run()
+
+      assert_received {:"$gen_cast", {:broadcast, "messages", "open:" <> path}}
+
+      query = path |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+      assert %{"auth_method" => "key"} = query
+      refute Map.has_key?(query, "key_path")
     end
 
     test "matches a saved SSH profile by its fields" do
