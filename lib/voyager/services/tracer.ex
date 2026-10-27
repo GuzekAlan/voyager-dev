@@ -146,8 +146,13 @@ defmodule Voyager.Services.Tracer do
   Stops any session, whoever started it.
   """
   @spec stop(origin()) :: :ok
-  def stop(origin) when origin in [:ui, :mcp],
-    do: GenServer.call(__MODULE__, {:stop, origin}, @call_timeout)
+  def stop(origin) when origin in [:ui, :mcp] do
+    with {:ok, node, tracer} <- GenServer.call(__MODULE__, {:stop, origin}) do
+      Agent.call(node, :trace_stop, [tracer], Agent.default_timeout())
+    end
+
+    :ok
+  end
 
   @doc """
   Ends a running session with `:disconnected` once its tracer goes down, without calling the node.
@@ -308,8 +313,8 @@ defmodule Voyager.Services.Tracer do
 
   # The session ends on the tracer's done message or its DOWN, never on this reply.
   def handle_call({:stop, origin}, _from, %{session: %{status: :running} = session} = state) do
-    Agent.call(session.node, :trace_stop, [session.tracer], Agent.default_timeout())
-    {:reply, :ok, %{state | run: %{state.run | stop_request: {:stopped, origin}}}}
+    {:reply, {:ok, session.node, session.tracer},
+     %{state | run: %{state.run | stop_request: {:stopped, origin}}}}
   end
 
   def handle_call({:stop, _origin}, _from, state), do: {:reply, :ok, state}
@@ -438,7 +443,10 @@ defmodule Voyager.Services.Tracer do
 
   defp stop_over_limit(%{session: session, run: %Run{stop_request: nil} = run} = state)
        when session.bytes > session.storage_limit do
-    Agent.call(session.node, :trace_stop, [session.tracer], Agent.default_timeout())
+    Task.Supervisor.start_child(Voyager.TaskSupervisor, fn ->
+      Agent.call(session.node, :trace_stop, [session.tracer], Agent.default_timeout())
+    end)
+
     %{state | run: %{run | stop_request: {:storage_limit, nil}}}
   end
 
