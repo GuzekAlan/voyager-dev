@@ -35,15 +35,12 @@ defmodule Voyager.Actions.SshConnections do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     saved_values =
-      Enum.reject(
-        [
-          cookie: cookie,
-          password: password,
-          key_path: key_path,
-          agent_socket_path: agent_socket_path
-        ],
-        fn {_field, value} -> is_nil(value) end
-      )
+      Enum.reject([cookie: cookie, password: password, key_path: key_path], fn {_field, value} ->
+        is_nil(value)
+      end)
+
+    agent_values =
+      if auth_method == :agent, do: [agent_socket_path: agent_socket_path], else: []
 
     on_conflict_set =
       [
@@ -52,7 +49,7 @@ defmodule Voyager.Actions.SshConnections do
         name_type: name_type,
         auth_method: auth_method,
         epmd_port: epmd_port
-      ] ++ saved_values
+      ] ++ saved_values ++ agent_values
 
     %SshConnection{}
     |> SshConnection.changeset(%{

@@ -170,7 +170,7 @@ defmodule Voyager.Services.TrayStatus do
     with {:ok, auth} <- ssh_auth(c), do: connect_ssh(c, auth)
   end
 
-  defp ssh_auth(%{auth_method: :agent}), do: {:ok, :agent}
+  defp ssh_auth(%{auth_method: :agent, agent_socket_path: path}), do: {:ok, {:agent, path}}
   defp ssh_auth(%{auth_method: :password, password: nil}), do: {:error, :missing_password}
   defp ssh_auth(%{auth_method: :password, password: password}), do: {:ok, {:password, password}}
 
@@ -192,6 +192,7 @@ defmodule Voyager.Services.TrayStatus do
       SshConnectionActions.upsert_connected(c.ssh_user, c.ssh_host, c.ssh_port, c.node_name,
         name_type: c.name_type,
         auth_method: c.auth_method,
+        agent_socket_path: c.agent_socket_path,
         epmd_port: c.epmd_port
       )
 

@@ -176,14 +176,26 @@ defmodule Voyager.SshConnectionsTest do
                "/new.sock"
     end
 
-    test "preserves existing agent_socket_path when no socket path is supplied" do
+    test "clears agent_socket_path when agent auth connects without one" do
+      {user, host, port, node} = @base_profile
+
+      SshConnectionActions.upsert_connected(user, host, port, node,
+        agent_socket_path: "/old.sock"
+      )
+
+      SshConnectionActions.upsert_connected(user, host, port, node, auth_method: :agent)
+
+      assert SshConnectionQueries.get_by_profile(user, host, port, node).agent_socket_path == nil
+    end
+
+    test "preserves agent_socket_path when connecting with another auth method" do
       {user, host, port, node} = @base_profile
 
       SshConnectionActions.upsert_connected(user, host, port, node,
         agent_socket_path: "/keep.sock"
       )
 
-      SshConnectionActions.upsert_connected(user, host, port, node)
+      SshConnectionActions.upsert_connected(user, host, port, node, auth_method: :password)
 
       assert SshConnectionQueries.get_by_profile(user, host, port, node).agent_socket_path ==
                "/keep.sock"
