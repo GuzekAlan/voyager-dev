@@ -6,6 +6,7 @@ defmodule Voyager.Services.TracerTest do
 
   alias Voyager.Queries.TraceSessions, as: TraceSessionQueries
   alias Voyager.Repo
+  alias Voyager.Schemas.TraceEvent
   alias Voyager.Schemas.TraceSession
   alias Voyager.Services.Tracer
   alias Voyager.Services.Tracer.Config
@@ -429,6 +430,27 @@ defmodule Voyager.Services.TracerTest do
     assert %{bytes: bytes} = TraceSessionQueries.get(id)
     assert bytes > 0
     assert %{bytes: ^bytes} = Tracer.active()
+  end
+
+  test "the writer saves a full queue without waiting for its timer" do
+    assert {:ok, session} = Tracer.create(:ui, save: true)
+
+    entries =
+      for seq <- 0..1_999 do
+        %{
+          seq: seq,
+          kind: :trace,
+          at: 1,
+          type: :call,
+          pid: self(),
+          process: nil,
+          mfa: {Date, :leap_year?, 1}
+        }
+      end
+
+    Writer.append(session, entries)
+    _ = :sys.get_state(Writer)
+    assert Repo.aggregate(TraceEvent, :count) == 2_000
   end
 
   test "sheds batches while the writer lags" do

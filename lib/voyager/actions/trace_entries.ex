@@ -14,17 +14,31 @@ defmodule Voyager.Actions.TraceEntries do
 
   @blank_session_event Map.new(TraceSessionEvent.__schema__(:fields) -- [:id], &{&1, nil})
 
+  @type prepared :: %{trace: [map()], session: [map()]}
+
   @doc """
   Inserts the entries. A trace's `search_text` has its terms inspected, with pids
   in the traced node's `<0.X.Y>` form. Returns the bytes stored plus a fixed cost per row.
   """
   @spec insert_all(integer(), [map()]) :: non_neg_integer()
-  def insert_all(session_id, entries) do
+  def insert_all(session_id, entries),
+    do: session_id |> prepare(entries) |> insert_prepared()
+
+  @doc "Encodes the entries into rows without touching the database, so it can run in parallel."
+  @spec prepare(integer(), [map()]) :: prepared()
+  def prepare(session_id, entries) do
     {traces, session_events} = Enum.split_with(entries, &(&1.kind == :trace))
 
-    insert(TraceEvent, Enum.map(traces, &trace_row(session_id, &1))) +
-      insert(TraceSessionEvent, Enum.map(session_events, &session_event_row(session_id, &1)))
+    %{
+      trace: Enum.map(traces, &trace_row(session_id, &1)),
+      session: Enum.map(session_events, &session_event_row(session_id, &1))
+    }
   end
+
+  @doc "Inserts rows from `prepare/2`; returns what `insert_all/2` does."
+  @spec insert_prepared(prepared()) :: non_neg_integer()
+  def insert_prepared(%{trace: traces, session: session_events}),
+    do: insert(TraceEvent, traces) + insert(TraceSessionEvent, session_events)
 
   defp insert(_schema, []), do: 0
 

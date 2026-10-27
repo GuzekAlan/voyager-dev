@@ -18,12 +18,13 @@ defmodule Voyager.Services.Tracer.Writer do
   require Logger
 
   @flush_ms 200
-  # 1000 rows of ~14 columns stay far below SQLite's bound-variable limit.
-  @chunk_rows 1_000
+  # 500 rows of ~14 columns stay far below SQLite's bound-variable limit.
+  @chunk_rows 500
+  @flush_rows 2_000
   @max_pending 10_000
   @pending_key {__MODULE__, :pending}
 
-  defstruct [:counter, pending: [], session: nil, timer: nil]
+  defstruct [:counter, pending: [], count: 0, session: nil, timer: nil]
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
@@ -62,7 +63,12 @@ defmodule Voyager.Services.Tracer.Writer do
   @impl true
   def handle_cast({:append, session, entries}, state) do
     state = if state.session && state.session.id != session.id, do: flush(state), else: state
-    {:noreply, schedule_flush(%{state | session: session, pending: [entries | state.pending]})}
+    state = %{state | session: session, pending: [entries | state.pending]}
+    state = %{state | count: state.count + length(entries)}
+
+    if state.count >= @flush_rows,
+      do: {:noreply, flush(state)},
+      else: {:noreply, schedule_flush(state)}
   end
 
   def handle_cast({:close_run, session}, state) do
@@ -102,7 +108,7 @@ defmodule Voyager.Services.Tracer.Writer do
     end
 
     :counters.sub(state.counter, 1, length(entries))
-    %{state | pending: []}
+    %{state | pending: [], count: 0}
   end
 
   defp write(session, entries) do
@@ -111,13 +117,29 @@ defmodule Voyager.Services.Tracer.Writer do
         stored =
           entries
           |> Enum.chunk_every(@chunk_rows)
-          |> Enum.map(&TraceEntryActions.insert_all(session.id, &1))
+          |> prepared_chunks(session.id)
+          |> Enum.map(&TraceEntryActions.insert_prepared/1)
           |> Enum.sum()
 
         {:ok, TraceSessionActions.sync(session, stored)}
       end)
 
     bytes
+  end
+
+  # Encoding is most of the CPU cost and the insert stays serial, so rows are built ahead in parallel.
+  defp prepared_chunks(chunks, session_id) do
+    Voyager.TaskSupervisor
+    |> Task.Supervisor.async_stream_nolink(
+      chunks,
+      &TraceEntryActions.prepare(session_id, &1),
+      max_concurrency: max(div(System.schedulers_online(), 2), 1),
+      timeout: :infinity
+    )
+    |> Stream.map(fn
+      {:ok, prepared} -> prepared
+      {:exit, reason} -> exit(reason)
+    end)
   end
 
   defp guarded(fun) do
