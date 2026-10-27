@@ -20,16 +20,20 @@ defmodule Voyager.Services.Tracer.Writer do
   @flush_ms 200
   # 1000 rows of ~14 columns stay far below SQLite's bound-variable limit.
   @chunk_rows 1_000
-  @max_queue 50
+  @max_pending 10_000
+  @pending_key {__MODULE__, :pending}
 
-  defstruct pending: [], session: nil, timer: nil
+  defstruct [:counter, pending: [], session: nil, timer: nil]
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
   @doc "Queues numbered `entries`; `session` is its state after them."
   @spec append(Session.t(), [Tracer.entry()]) :: :ok
-  def append(session, entries), do: GenServer.cast(__MODULE__, {:append, session, entries})
+  def append(session, entries) do
+    :counters.add(:persistent_term.get(@pending_key), 1, length(entries))
+    GenServer.cast(__MODULE__, {:append, session, entries})
+  end
 
   @doc "Flushes what is queued, then prunes older sessions over the storage limit."
   @spec close_run(Session.t()) :: :ok
@@ -39,18 +43,21 @@ defmodule Voyager.Services.Tracer.Writer do
   @spec flush() :: :ok
   def flush, do: GenServer.call(__MODULE__, :flush)
 
+  @doc "True while too many entries wait to be saved, so the caller sheds instead of queueing more."
   @spec overloaded?() :: boolean()
   def overloaded? do
-    with pid when is_pid(pid) <- Process.whereis(__MODULE__),
-         {:message_queue_len, len} <- Process.info(pid, :message_queue_len) do
-      len > @max_queue
-    else
-      _down -> false
+    case :persistent_term.get(@pending_key, nil) do
+      nil -> false
+      counter -> :counters.get(counter, 1) > @max_pending
     end
   end
 
   @impl true
-  def init(nil), do: {:ok, %__MODULE__{}}
+  def init(nil) do
+    counter = :counters.new(1, [:atomics])
+    :persistent_term.put(@pending_key, counter)
+    {:ok, %__MODULE__{counter: counter}}
+  end
 
   @impl true
   def handle_cast({:append, session, entries}, state) do
@@ -94,6 +101,7 @@ defmodule Voyager.Services.Tracer.Writer do
         send(Tracer, {:trace_write_failed, session.id, reason})
     end
 
+    :counters.sub(state.counter, 1, length(entries))
     %{state | pending: []}
   end
 

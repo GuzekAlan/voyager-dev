@@ -439,7 +439,8 @@ defmodule Voyager.Services.TracerTest do
     on_exit(fn -> :sys.resume(Writer) end)
     :sys.suspend(Writer)
     event = %{type: :call, pid: self(), process: nil, mfa: {Date, :leap_year?, 1}, at: 1}
-    for _ <- 1..60, do: send(Tracer, {:voyager_trace_events, tracer, [event], 0})
+    batch = List.duplicate(event, 200)
+    for _ <- 1..60, do: send(Tracer, {:voyager_trace_events, tracer, batch, 0})
     _ = :sys.get_state(Tracer)
     assert %{dropped: dropped} = Tracer.active()
     assert dropped > 0
