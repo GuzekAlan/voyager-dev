@@ -2,7 +2,11 @@ defmodule Voyager.Services.TracerTest do
   # async: false because these tests swap the global erpc impl and share the app's Tracer.
   use Voyager.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Voyager.Queries.TraceSessions, as: TraceSessionQueries
+  alias Voyager.Repo
+  alias Voyager.Schemas.TraceSession
   alias Voyager.Services.Tracer
   alias Voyager.Services.Tracer.Config
   alias Voyager.Services.Tracer.Writer
@@ -440,6 +444,24 @@ defmodule Voyager.Services.TracerTest do
     assert %{dropped: dropped} = Tracer.active()
     assert dropped > 0
     :sys.resume(Writer)
+  end
+
+  test "ends a saved run whose entries cannot be saved" do
+    tracer_pid = Process.whereis(Tracer)
+    assert {:ok, _session} = Tracer.create(:ui, save: true)
+    assert {:ok, _session} = configure()
+    Writer.flush()
+    assert {:ok, _session} = Tracer.start(:ui)
+    Repo.delete_all(TraceSession)
+
+    capture_log(fn ->
+      assert_receive {:session_entries, _session, [%{kind: :stopped, reason: :write_failed}]},
+                     1_000
+
+      Writer.flush()
+    end)
+
+    assert Process.whereis(Tracer) == tracer_pid
   end
 
   test "returns the agent's refusal on start" do

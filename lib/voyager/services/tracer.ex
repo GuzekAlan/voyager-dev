@@ -50,6 +50,7 @@ defmodule Voyager.Services.Tracer do
           | :time_limit
           | :mailbox_limit
           | :storage_limit
+          | :write_failed
           | :interrupted
           | :node_down
           | {:tracer_down, term()}
@@ -189,9 +190,12 @@ defmodule Voyager.Services.Tracer do
   end
 
   @impl true
-  def init(nil) do
+  def init(nil), do: {:ok, %__MODULE__{}, {:continue, :interrupt_running}}
+
+  @impl true
+  def handle_continue(:interrupt_running, state) do
     TraceSessionActions.interrupt_running()
-    {:ok, %__MODULE__{}}
+    {:noreply, state}
   end
 
   @impl true
@@ -402,6 +406,9 @@ defmodule Voyager.Services.Tracer do
   def handle_info({:trace_written, id, bytes}, %{session: %{id: id} = session} = state),
     do: {:noreply, stop_over_limit(%{state | session: %{session | bytes: bytes}})}
 
+  def handle_info({:trace_write_failed, id, _reason}, %{session: %{id: id}} = state),
+    do: {:noreply, request_stop(state, :write_failed)}
+
   def handle_info(_stale, state), do: {:noreply, state}
 
   @spec end_run(state(), stop_reason(), non_neg_integer()) :: state()
@@ -441,16 +448,20 @@ defmodule Voyager.Services.Tracer do
     state
   end
 
-  defp stop_over_limit(%{session: session, run: %Run{stop_request: nil} = run} = state)
-       when session.bytes > session.storage_limit do
+  defp stop_over_limit(%{session: session} = state) when session.bytes > session.storage_limit,
+    do: request_stop(state, :storage_limit)
+
+  defp stop_over_limit(state), do: state
+
+  defp request_stop(%{session: session, run: %Run{stop_request: nil} = run} = state, reason) do
     Task.Supervisor.start_child(Voyager.TaskSupervisor, fn ->
       Agent.call(session.node, :trace_stop, [session.tracer], Agent.default_timeout())
     end)
 
-    %{state | run: %{run | stop_request: {:storage_limit, nil}}}
+    %{state | run: %{run | stop_request: {reason, nil}}}
   end
 
-  defp stop_over_limit(state), do: state
+  defp request_stop(state, _reason), do: state
 
   defp storage_limit,
     do: Settings.get(:trace_storage_limit_mb, @default_storage_limit_mb) * 1_000_000

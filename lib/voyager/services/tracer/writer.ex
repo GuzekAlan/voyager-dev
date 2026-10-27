@@ -9,13 +9,13 @@ defmodule Voyager.Services.Tracer.Writer do
 
   use GenServer
 
-  require Logger
-
   alias Voyager.Actions.TraceEntries, as: TraceEntryActions
   alias Voyager.Actions.TraceSessions, as: TraceSessionActions
   alias Voyager.Repo
   alias Voyager.Services.Tracer
   alias Voyager.Services.Tracer.Session
+
+  require Logger
 
   @flush_ms 200
   # 1000 rows of ~14 columns stay far below SQLite's bound-variable limit.
