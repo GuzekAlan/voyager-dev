@@ -38,7 +38,9 @@ defmodule Voyager.MCP.Tools.Connect do
     field :name_type, :enum,
       values: Map.keys(@name_types),
       default: "longnames",
-      description: "`shortnames` for a node started with `--sname`, `longnames` for `--name`."
+      description:
+        "`longnames` for a node started with `--name` (\"shop@127.0.0.1\"), " <>
+          "`shortnames` for `--sname` (\"shop@localhost\")."
 
     field :ssh_user, :string, description: "SSH user. Set with `ssh_host` to tunnel through SSH."
     field :ssh_host, :string, description: "SSH host the node runs on."
