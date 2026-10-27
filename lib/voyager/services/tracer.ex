@@ -15,22 +15,21 @@ defmodule Voyager.Services.Tracer do
   `{:session_entries, session, entries}` with the entries just appended, oldest first.
 
   A session created with `save: true` gets a `Voyager.Schemas.TraceSession` row and
-  writes every entry as it is appended; `load/1` makes it active again later.
+  every entry is handed to `Writer` as it is appended; `load/1` makes it active again later.
   Saved entries are capped by the `:trace_storage_limit_mb` setting: a run over it
   stops with `:storage_limit`, and older sessions are pruned when a run ends.
   """
 
   use GenServer
 
-  alias Voyager.Actions.TraceEntries, as: TraceEntryActions
   alias Voyager.Actions.TraceSessions, as: TraceSessionActions
   alias Voyager.Agent
   alias Voyager.Queries.TraceEntries, as: TraceEntryQueries
   alias Voyager.Queries.TraceSessions, as: TraceSessionQueries
-  alias Voyager.Repo
   alias Voyager.Services.Tracer.Config
   alias Voyager.Services.Tracer.Run
   alias Voyager.Services.Tracer.Session
+  alias Voyager.Services.Tracer.Writer
   alias Voyager.Settings
 
   @topic "tracing"
@@ -218,6 +217,8 @@ defmodule Voyager.Services.Tracer do
   end
 
   def handle_call({:load, id}, _from, state) do
+    Writer.flush()
+
     case TraceSessionQueries.get(id) do
       nil -> {:reply, {:error, :not_found}, state}
       row -> loaded(row)
@@ -228,12 +229,15 @@ defmodule Voyager.Services.Tracer do
     do: {:reply, {:error, :busy}, state}
 
   def handle_call({:delete, id}, _from, %{session: %{id: id}}) do
+    Writer.flush()
     broadcast({:session_closed, id})
     {:reply, TraceSessionActions.delete(id), %__MODULE__{}}
   end
 
-  def handle_call({:delete, id}, _from, state),
-    do: {:reply, TraceSessionActions.delete(id), state}
+  def handle_call({:delete, id}, _from, state) do
+    Writer.flush()
+    {:reply, TraceSessionActions.delete(id), state}
+  end
 
   def handle_call(:close, _from, %{session: nil} = state), do: {:reply, :ok, state}
 
@@ -390,6 +394,9 @@ defmodule Voyager.Services.Tracer do
     {:noreply, end_run(state, down_reason(reason), session.dropped)}
   end
 
+  def handle_info({:trace_written, id, bytes}, %{session: %{id: id} = session} = state),
+    do: {:noreply, stop_over_limit(%{state | session: %{session | bytes: bytes}})}
+
   def handle_info(_stale, state), do: {:noreply, state}
 
   @spec end_run(state(), stop_reason(), non_neg_integer()) :: state()
@@ -424,7 +431,7 @@ defmodule Voyager.Services.Tracer do
       )
 
     # Pruning only here lets disk peak near twice the limit.
-    if session.save, do: TraceSessionActions.prune(session.storage_limit, session.id)
+    if session.save, do: Writer.close_run(state.session)
 
     state
   end
@@ -497,6 +504,8 @@ defmodule Voyager.Services.Tracer do
   end
 
   defp saved_entries(id, opts) do
+    Writer.flush()
+
     if TraceSessionQueries.get(id),
       do: {:ok, %{entries: TraceEntryQueries.page(id, opts), truncated?: false}},
       else: {:error, :not_found}
@@ -536,7 +545,7 @@ defmodule Voyager.Services.Tracer do
     {traces, controls} =
       Enum.split_with(entries, &(&1.kind in [:trace, :dropped]))
 
-    session = save(session, entries)
+    if session.save and entries != [], do: Writer.append(session, entries)
     broadcast({:session_entries, session, entries})
 
     kept = Enum.take(Enum.reverse(traces) ++ state.traces, @kept_traces)
@@ -548,23 +557,6 @@ defmodule Voyager.Services.Tracer do
         traces: kept
     }
   end
-
-  defp save(%Session{save: true} = session, entries) do
-    {:ok, session} =
-      Repo.transact(fn ->
-        session = %{
-          session
-          | bytes: session.bytes + TraceEntryActions.insert_all(session.id, entries)
-        }
-
-        TraceSessionActions.sync(session)
-        {:ok, session}
-      end)
-
-    session
-  end
-
-  defp save(session, _entries), do: session
 
   defp resolve_pids(_node, %Config{processes: processes}) when processes != :pids, do: {:ok, []}
 
@@ -583,7 +575,7 @@ defmodule Voyager.Services.Tracer do
   # Batches are dropped here too, so a flood cannot grow this process' mailbox either.
   defp overloaded? do
     {:message_queue_len, len} = Process.info(self(), :message_queue_len)
-    len > @max_mailbox
+    len > @max_mailbox or Writer.overloaded?()
   end
 
   defp broadcast(message), do: Phoenix.PubSub.broadcast(Voyager.PubSub, @topic, message)

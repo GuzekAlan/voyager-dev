@@ -5,6 +5,7 @@ defmodule Voyager.Services.TracerTest do
   alias Voyager.Queries.TraceSessions, as: TraceSessionQueries
   alias Voyager.Services.Tracer
   alias Voyager.Services.Tracer.Config
+  alias Voyager.Services.Tracer.Writer
   alias Voyager.Test.Recursive
   alias Voyager.Test.VoyagerAgentFixture
 
@@ -20,6 +21,7 @@ defmodule Voyager.Services.TracerTest do
     on_exit(fn ->
       Tracer.stop(:ui)
       _ = :sys.get_state(Tracer)
+      Writer.flush()
     end)
 
     {:ok, session} = Tracer.create(:ui)
@@ -111,12 +113,14 @@ defmodule Voyager.Services.TracerTest do
     assert_receive {:session_entries, _session, [configured]}
     assert {:ok, _session} = Tracer.start(:ui)
     assert_receive {:session_entries, _session, [started]}
+    Writer.flush()
     assert %{status: :running, started_at: %DateTime{}} = TraceSessionQueries.get(id)
 
     Date.leap_year?(~D[2024-01-01])
     assert_receive {:session_entries, %{traces: 1}, [%{kind: :trace} = trace]}, 1_000
     assert :ok = Tracer.stop(:mcp)
     assert_receive {:session_entries, _session, [%{kind: :stopped} = stopped]}
+    Writer.flush()
 
     assert %{status: :stopped, stop_reason: :stopped, traces: 1, bytes: bytes, node: node} =
              TraceSessionQueries.get(id)
@@ -145,6 +149,7 @@ defmodule Voyager.Services.TracerTest do
     assert_receive {:session_entries, _session, [%{kind: :stopped, reason: :storage_limit}]},
                    1_000
 
+    Writer.flush()
     assert %{status: :stopped, stop_reason: :storage_limit} = TraceSessionQueries.get(id)
   end
 
@@ -178,6 +183,7 @@ defmodule Voyager.Services.TracerTest do
     assert {:ok, %{status: :running}} = Tracer.start(:ui)
     Date.leap_year?(~D[2024-01-01])
     assert_receive {:session_entries, %{traces: 2}, [%{seq: 6, kind: :stopped}]}
+    Writer.flush()
     assert %{traces: 2} = TraceSessionQueries.get(id)
   end
 
@@ -405,6 +411,35 @@ defmodule Voyager.Services.TracerTest do
 
     assert_receive {:session_entries, %{dropped: 6},
                     [%{seq: 1_007, kind: :dropped, count: 2}, %{seq: 1_008, kind: :trace}]}
+  end
+
+  test "keeps a saved session's bytes in step with its saved rows" do
+    assert {:ok, %{id: id}} = Tracer.create(:ui, save: true)
+    assert {:ok, _session} = configure(%{max_events: 3})
+    assert {:ok, _session} = Tracer.start(:ui)
+    for _ <- 1..3, do: Date.leap_year?(~D[2024-01-01])
+    assert_receive {:session_entries, _session, [%{kind: :stopped}]}
+
+    Writer.flush()
+    _ = :sys.get_state(Tracer)
+    assert %{bytes: bytes} = TraceSessionQueries.get(id)
+    assert bytes > 0
+    assert %{bytes: ^bytes} = Tracer.active()
+  end
+
+  test "sheds batches while the writer lags" do
+    assert {:ok, _session} = Tracer.create(:ui, save: true)
+    assert {:ok, _session} = configure()
+    assert {:ok, %{tracer: tracer}} = Tracer.start(:ui)
+
+    on_exit(fn -> :sys.resume(Writer) end)
+    :sys.suspend(Writer)
+    event = %{type: :call, pid: self(), process: nil, mfa: {Date, :leap_year?, 1}, at: 1}
+    for _ <- 1..60, do: send(Tracer, {:voyager_trace_events, tracer, [event], 0})
+    _ = :sys.get_state(Tracer)
+    assert %{dropped: dropped} = Tracer.active()
+    assert dropped > 0
+    :sys.resume(Writer)
   end
 
   test "returns the agent's refusal on start" do
